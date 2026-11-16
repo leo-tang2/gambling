@@ -1,0 +1,314 @@
+/* Bar Gambling — the site. Colours come straight from the game's palette. */
+:root {
+  --black: #050407;
+  --ink: #0b090d;
+  --shadow: #141017;
+  --dusk: #1d171c;
+  --wood: #3d2a1e;
+  --wood-light: #573b26;
+  --amber-dark: #a8692e;
+  --amber: #d4923f;
+  --gold: #f2c062;
+  --glow: #ffe6a0;
+  --felt-dark: #0f1f17;
+  --felt: #173226;
+  --felt-light: #23483a;
+  --red: #a3333a;
+  --bone: #9a949a;
+  --paper: #d8d0c4;
+  --cream: #f4ecdc;
+
+  --body: 'Courier Prime', 'Courier New', ui-monospace, monospace;
+  --measure: 62ch;
+  --gutter: clamp(16px, 4vw, 48px);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { background: var(--black); color-scheme: dark; }
+
+body {
+  margin: 0;
+  background: var(--black);
+  color: var(--paper);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+img { display: block; max-width: 100%; height: auto; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip {
+  position: absolute; left: 8px; top: -60px; z-index: 10;
+  padding: 8px 12px; background: var(--gold); color: var(--black); font-weight: 700;
+}
+.skip:focus { top: 8px; }
+
+:focus-visible { outline: 2px solid var(--glow); outline-offset: 3px; }
+
+a { color: var(--gold); }
+
+/* pixel headings: the canvas is drawn by site.js; without JS the text shows as-is */
+.px { margin: 0; line-height: 1; font-weight: 700; color: var(--gold); }
+.px canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+
+/* ---------------- hero: the title hangs where the lamp would be ---------------- */
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  isolation: isolate;
+  overflow-x: clip;
+}
+
+.hero-title {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  padding: clamp(40px, 9vh, 96px) var(--gutter) 0;
+}
+
+/* the bulb's warmth behind the name */
+.hero-title::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: 0;
+  width: min(900px, 120vw);
+  height: 420px;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse 50% 45% at 50% 38%, rgba(255, 230, 160, 0.13), rgba(212, 146, 63, 0.05) 55%, transparent 75%);
+  pointer-events: none;
+}
+
+.hero h1 { font-size: clamp(40px, 8vw, 96px); color: var(--glow); }
+
+.hero-line {
+  margin: 22px 0 0;
+  max-width: 46ch;
+  font-size: clamp(18px, 2.2vw, 22px);
+  color: var(--cream);
+}
+
+.hero-actions {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.fine { margin: 0; font-size: 14px; color: var(--bone); }
+
+.hero-shot {
+  position: relative;
+  z-index: 1;
+  align-self: end;
+  margin-top: clamp(-160px, -12vw, -40px);
+  /* the picture rises out of the dark, so the lamp cone seems to fall from the title */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 82%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 34%, #000 82%, transparent 100%);
+}
+.hero-shot img {
+  width: 100%;
+  image-rendering: pixelated;
+}
+
+/* ---------------- buttons, like the game's own panels ---------------- */
+
+.btn {
+  display: inline-block;
+  padding: 12px 22px 11px;
+  border: 2px solid var(--amber-dark);
+  background: var(--ink);
+  color: var(--gold);
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 1.2;
+  text-decoration: none;
+  box-shadow: 0 3px 0 var(--black), inset 0 -2px 0 var(--shadow);
+}
+.btn:hover { border-color: var(--gold); color: var(--glow); background: var(--shadow); }
+.btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--black); }
+
+.btn-play { border-color: var(--gold); font-size: 18px; padding: 14px 26px 13px; }
+.btn-small { padding: 7px 16px 6px; font-size: 16px; }
+
+/* ---------------- sections ---------------- */
+
+main > section {
+  padding: clamp(64px, 10vw, 128px) var(--gutter) 0;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.intro { margin: 14px 0 0; color: var(--bone); max-width: var(--measure); }
+
+/* ---------------- tonight's games: a bar's menu board ---------------- */
+
+.board {
+  list-style: none;
+  margin: 36px 0 0;
+  padding: clamp(20px, 3.5vw, 40px);
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.012) 0 2px, transparent 2px 6px),
+    var(--felt-dark);
+  border: 2px solid var(--wood-light);
+  box-shadow: inset 0 0 0 6px var(--felt-dark), inset 0 0 0 8px var(--felt);
+  max-width: 820px;
+}
+
+.board-item + .board-item {
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 2px dashed var(--felt-light);
+}
+
+.board-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.board-name {
+  font-size: clamp(20px, 2.6vw, 26px);
+  font-weight: 700;
+  color: var(--cream);
+  text-decoration: none;
+}
+a.board-name:hover { color: var(--glow); text-decoration: underline; text-underline-offset: 4px; }
+
+.leader {
+  flex: 1;
+  min-width: 24px;
+  border-bottom: 3px dotted var(--felt-light);
+  transform: translateY(-5px);
+}
+
+.board-tag { color: var(--gold); white-space: nowrap; }
+
+.board-item p { margin: 10px 0 16px; max-width: 56ch; color: var(--paper); }
+
+.board-item--soon .board-name,
+.board-item--soon .board-tag,
+.board-item--soon p { color: var(--bone); }
+.board-item--soon p { margin-bottom: 0; }
+
+/* ---------------- how a night goes: a real sequence, so it's numbered ---------------- */
+
+.steps { list-style: none; margin: 48px 0 0; padding: 0; }
+
+.step {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: clamp(24px, 4vw, 56px);
+  align-items: start;
+}
+.step + .step { margin-top: clamp(56px, 8vw, 96px); }
+
+.step-text { padding-top: 8px; }
+.step-n { display: block; margin-bottom: 14px; }
+
+.step h3 {
+  margin: 0;
+  font-size: clamp(22px, 2.6vw, 28px);
+  line-height: 1.2;
+  color: var(--cream);
+}
+
+.step p { margin: 12px 0 0; max-width: 46ch; }
+
+.step-shots {
+  position: relative;
+  margin: 0;
+}
+.step-shots img {
+  width: 100%;
+  border: 2px solid var(--wood);
+  image-rendering: pixelated;
+  background: var(--ink);
+}
+/* a second shot sits on top of the first, like a photo dropped on the felt */
+.step-shots img + img {
+  position: absolute;
+  width: 46%;
+  left: -7%;
+  bottom: -16%;
+  border-color: var(--wood-light);
+  box-shadow: 0 0 0 4px var(--black), 0 10px 0 4px rgba(5, 4, 7, 0.7);
+}
+.step:has(img + img) { padding-bottom: 8%; }
+
+kbd {
+  display: inline-block;
+  min-width: 1.9em;
+  padding: 1px 7px 0;
+  border: 2px solid var(--wood-light);
+  border-bottom-width: 4px;
+  background: var(--dusk);
+  color: var(--cream);
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 0.88em;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ---------------- keys ---------------- */
+
+.keylist {
+  margin: 32px 0 40px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px 40px;
+  max-width: 900px;
+}
+.keylist div { display: flex; align-items: baseline; gap: 14px; }
+.keylist dt { flex: 0 0 auto; }
+.keylist dd { margin: 0; }
+
+/* ---------------- footer ---------------- */
+
+.foot {
+  margin-top: clamp(80px, 12vw, 144px);
+  padding: 28px var(--gutter) 40px;
+  border-top: 2px solid var(--shadow);
+  text-align: center;
+  color: var(--bone);
+  font-size: 15px;
+}
+.foot p { margin: 4px 0; }
+
+/* ---------------- small screens ---------------- */
+
+@media (max-width: 820px) {
+  .step { grid-template-columns: 1fr; }
+  .step-text { padding-top: 0; }
+  .step-shots img + img { position: static; width: 100%; margin-top: 10px; box-shadow: none; border-color: var(--wood); }
+  .step:has(img + img) { padding-bottom: 0; }
+}
+
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .hero { min-height: auto; }
+  .hero-shot { margin-top: -24px; }
+  .board-row { flex-wrap: wrap; }
+  .leader { display: none; }
+  .board-tag { width: 100%; font-size: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:active { transform: none; }
+}
