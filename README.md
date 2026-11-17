@@ -64,8 +64,11 @@ up. Going broke, or losing at roulette, ends the run and wipes the save.
 ## The website
 
 `index.html` is the Bar Gambling site (styles and script in `src/site/`, images in `public/site/`);
-`holdem/index.html` is the game. `npm.cmd run build` builds both into `dist/`. The site is deployed
-on Vercel from this project's GitHub repo; every push to `main` redeploys it.
+`holdem/index.html` is the game. `npm.cmd run build` builds both into `dist/`.
+
+Live at **https://bar-gambling-six.vercel.app** (the game is at `/holdem/`). It's the `bar-gambling`
+project on the LeoWork Vercel team, linked to https://github.com/leo-tang2/gambling: every push to
+`main` redeploys it.
 
 ## Layout
 
