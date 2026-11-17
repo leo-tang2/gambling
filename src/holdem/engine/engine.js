@@ -38,6 +38,7 @@ export function createGame({
       pending: false, // must still act this street
       canRaise: false, // betting has been (re)opened for this player
       lastAction: null,
+      ...freshHandStats(),
     })),
     button: button ?? rng.int(players.length), // random starting dealer button
     handNumber: 0,
@@ -65,6 +66,15 @@ const flush = (g) => {
   g._events = [];
   return out;
 };
+
+/**
+ * Public record of how a player has acted this hand (everyone at the table saw it):
+ * bets/raises preflop, in total and on the current street, and whether they put money in
+ * voluntarily preflop. The AI uses this to guess what its opponents might be holding.
+ */
+function freshHandStats() {
+  return { preRaises: 0, raises: 0, streetRaises: 0, vpip: false };
+}
 
 export const isLive = (p) => !p.out && !p.folded;
 const canAct = (p) => isLive(p) && !p.allIn;
@@ -114,8 +124,9 @@ export function startHand(g) {
     p.pending = false;
     p.canRaise = false;
     p.lastAction = null;
+    Object.assign(p, freshHandStats());
   }
-  g.deck = g.deckFn ? g.deckFn(g) : shuffledDeck(g.rng); // fresh, unbiased shuffle every hand
+  g.deck =g.deckFn ? g.deckFn(g) : shuffledDeck(g.rng); // fresh, unbiased shuffle every hand
   g.board = [];
   g.street = 'preflop';
   g.currentBet = 0;
@@ -165,6 +176,7 @@ function openStreet(g, firstActorAfter) {
   for (const p of g.players) {
     p.pending = canAct(p);
     p.canRaise = canAct(p);
+    p.streetRaises = 0;
   }
   g.actionOn = firstActorAfter;
 }
@@ -291,6 +303,7 @@ export function applyAction(g, action) {
     case 'call':
       if (!legal.canCall) throw new Error('nothing to call');
       added = put(g, p, legal.toCall);
+      if (g.street === 'preflop') p.vpip = true;
       break;
     case 'raise': {
       if (!legal.canRaise) throw new Error('raising is not allowed here');
@@ -303,6 +316,9 @@ export function applyAction(g, action) {
       if (full) g.lastRaiseSize = raiseSize;
       g.currentBet = to;
       g.raisesThisStreet++;
+      p.raises++;
+      p.streetRaises++;
+      if (g.street === 'preflop') { p.preRaises++; p.vpip = true; }
       for (const q of g.players) {
         if (q === p || !canAct(q)) continue;
         q.pending = true; // everyone must respond to the new amount
@@ -444,6 +460,7 @@ export function playerView(g, seat) {
     players: g.players.map((p) => ({
       seat: p.seat, name: p.name, stack: p.stack, bet: p.bet, committed: p.committed,
       folded: p.folded, allIn: p.allIn, out: p.out, lastAction: p.lastAction,
+      preRaises: p.preRaises, raises: p.raises, streetRaises: p.streetRaises, vpip: p.vpip,
     })),
   };
 }

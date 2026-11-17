@@ -33,7 +33,12 @@ you're in your seat.
 - **Q:** puff on your cigar, if you took one.
 
 Everyone at the table, their money and what they last did is listed bottom-right, above your hand.
-When cards land on the board the camera zooms in on them for a moment.
+When cards land on the board the camera zooms in on them for a moment. Whoever wins a pot turns
+their cards up, even if everyone else folded, and the camera leans in to show them.
+
+The three play differently: Don Sal is tight, Bruno aggressive, Frankie loose. They fold when the
+betting says they're beaten, bluff now and then, and read big bets and re-raises as strength.
+Anyone who goes broke doesn't walk out of the back room.
 
 ## A night at the table
 
@@ -64,11 +69,8 @@ up. Going broke, or losing at roulette, ends the run and wipes the save.
 ## The website
 
 `index.html` is the Bar Gambling site (styles and script in `src/site/`, images in `public/site/`);
-`holdem/index.html` is the game. `npm.cmd run build` builds both into `dist/`.
-
-Live at **https://bar-gambling-six.vercel.app** (the game is at `/holdem/`). It's the `bar-gambling`
-project on the LeoWork Vercel team, linked to https://github.com/leo-tang2/gambling: every push to
-`main` redeploys it.
+`holdem/index.html` is the game. `npm.cmd run build` builds both into `dist/`. The site is deployed
+on Vercel from this project's GitHub repo; every push to `main` redeploys it.
 
 ## Layout
 

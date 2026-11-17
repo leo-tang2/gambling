@@ -2,6 +2,7 @@
 # Body faces -Y (exports facing +Z). Origin on the floor under the seat. The head is a
 # separate child object named "Head" whose origin is the neck pivot, so the game can turn it.
 exec(open(PROJECT_DIR + r"\tools\blender\_head.py").read())
+from mathutils import Vector
 
 FACES = {
     'boss': [
@@ -151,17 +152,76 @@ sh_y = 0.02 - math.sin(lean) * H / 2
 add(lib.box('shoulders', (W * S['taper'] + 0.06, D * 0.85, 0.09), (0, sh_y, shoulder_z - 0.04), rot=(lean, 0, 0),
             atlas=a, faces={'default': 'suit'}, mat=mat, taper=(0.9, 0.9)))
 add(lib.box('neckbox', (0.1, 0.1, 0.09), (0, sh_y - 0.01, shoulder_z + 0.03), atlas=a, faces={'default': 'neck'}, mat=mat))
-# arms: upper arm down & forward, forearm resting on the rail, hands toward the felt
-arm_x = W * S['taper'] / 2 + 0.035
+# arms: a joint chain so nothing floats. shoulder -> elbow (just off the table edge) ->
+# wrist on the padded rail -> hand on the felt. Each piece is a box stretched between two
+# joints (plus a little overlap), with a cube at the elbow to close the bend.
+# In the game the opponents sit SEAT_DIST from the table's centre (layout.js SEAT_RADIUS
+# + 0.06, plus BackRoom.js SIT_BACK); the table's rail runs from radius 0.70 to 0.80 with
+# its top at ~0.786 m, so from the seat the rail starts EDGE metres in front.
+SEAT_DIST = 1.12 + 0.06 + 0.14
+EDGE = SEAT_DIST - 0.80
+RAIL_TOP = 0.786
+
+
+def limb(name, p0, p1, w, t, region, ext0=0.0, ext1=0.0):
+    """Box from joint p0 to joint p1 (pushed ext0/ext1 past each end): w wide, t thick
+    (thickness points up where it can)."""
+    v0, v1 = Vector(p0), Vector(p1)
+    d = (v1 - v0).normalized()
+    v0, v1 = v0 - d * ext0, v1 + d * ext1
+    rot = d.to_track_quat('Z', 'Y').to_euler()
+    return lib.box(name, (w, t, (v1 - v0).length), tuple((v0 + v1) / 2), rot=tuple(rot), atlas=a,
+                   faces={'default': region}, mat=mat)
+
+
+arm_x = W * S['taper'] / 2 + 0.03
+right_upper, right_fore = [], []  # the character's right arm (facing -Y, that's -X) can move
+joints = {}
 for s in (-1, 1):
-    add(lib.box('upper', (0.1, 0.11, 0.32), (s * arm_x, sh_y - 0.1, shoulder_z - 0.2),
-                rot=(math.radians(32), 0, s * math.radians(-6)), atlas=a, faces={'default': 'sleeve'}, mat=mat))
-    add(lib.box('fore', (0.09, 0.3, 0.085), (s * (arm_x - 0.06), sh_y - 0.36, 0.82), rot=(0, 0, s * math.radians(14)),
-                atlas=a, faces={'default': 'forearm'}, mat=mat))
-    add(lib.box('hand', (0.08, 0.09, 0.05), (s * (arm_x - 0.12), sh_y - 0.55, 0.815), rot=(0, 0, s * math.radians(14)),
-                atlas=a, faces={'default': 'hand'}, mat=mat))
+    shoulder = (s * arm_x, sh_y + 0.01, shoulder_z - 0.06)
+    elbow = (s * (arm_x + 0.03), -(EDGE - 0.16), RAIL_TOP + 0.075)
+    wrist = (s * (arm_x - 0.07), -(EDGE + 0.06), RAIL_TOP + 0.03)
+    tip = (s * (arm_x - 0.11), -(EDGE + 0.16), RAIL_TOP - 0.005)
+    up, fo = (right_upper, right_fore) if s == -1 else (parts, parts)
+    up.append(limb('upper', shoulder, elbow, 0.1, 0.11, 'sleeve', ext0=0.04))
+    up.append(lib.box('elbow', (0.105, 0.105, 0.105), elbow, atlas=a, faces={'default': 'sleeve'}, mat=mat))
+    fo.append(limb('fore', elbow, wrist, 0.09, 0.085, 'forearm', ext1=0.015))
+    fo.append(limb('hand', wrist, tip, 0.085, 0.045, 'hand'))
+    if s == -1:
+        joints = dict(shoulder=shoulder, elbow=elbow, tip=tip)
 body = lib.join(parts, 'Body')
 lib.flat_shade(body)
+
+
+def pivot_at(obj, p):
+    """Move an object's origin to point p without moving its mesh."""
+    bpy.context.scene.cursor.location = p
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+    bpy.context.scene.cursor.location = (0, 0, 0)
+
+
+def attach(child, parent):
+    child.parent = parent
+    child.matrix_parent_inverse = parent.matrix_world.inverted()
+
+
+# The right arm as two nodes the game can pose (no rig): UpperArmR turns at the shoulder,
+# ForeArmR at the elbow, and the empty HandTipR marks the end of the hand.
+upper_r = lib.join(right_upper, 'UpperArmR')
+lib.flat_shade(upper_r)
+pivot_at(upper_r, joints['shoulder'])
+fore_r = lib.join(right_fore, 'ForeArmR')
+lib.flat_shade(fore_r)
+pivot_at(fore_r, joints['elbow'])
+attach(upper_r, body)
+attach(fore_r, upper_r)
+tip_r = bpy.data.objects.new('HandTipR', None)
+bpy.context.scene.collection.objects.link(tip_r)
+tip_r.location = joints['tip']
+attach(tip_r, fore_r)
 
 # head, built around the neck pivot, then re-originated there
 hw, hd, hh = S['head']

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { buildGrayBox, buildGrayLampVisuals } from './GrayBox.js';
 import { Lamp } from './Lamp.js';
 import { SEAT_ANGLES, SEAT_RADIUS, polar, seatSpots, DECK_SPOT, TABLE_HEIGHT } from './layout.js';
-import { ease } from '../../shared/anim/Tweens.js';
 import { Smoke, Ember, addCigarette } from './Extras.js';
 
 // opponents sit a little further back from the light than the chairs' original spot
@@ -39,6 +38,13 @@ class Character {
     this.idlePitch = 0;
     this.lean = 0;
     this.wisp = Math.random();
+    // the right arm can move: two nodes (shoulder, elbow) plus a marker at the end of the hand
+    this.upperArm = root.getObjectByName('UpperArmR');
+    this.foreArm = root.getObjectByName('ForeArmR');
+    this.handTip = root.getObjectByName('HandTipR');
+    this.armRest = this.upperArm && this.foreArm && this.handTip
+      ? [this.upperArm.quaternion.clone(), this.foreArm.quaternion.clone()] : null;
+    this.slump = 0; // 0 upright .. 1 fallen sideways out of the chair
     const s = SMOKES[id];
     if (this.head && s) {
       if (s.cigar) {
@@ -50,6 +56,59 @@ class Character {
   }
 
   lookAt(worldPoint) { this.lookTarget = worldPoint?.clone() ?? null; }
+
+  /**
+   * Two-joint reach for the right arm (there's no rig): returns the shoulder and elbow
+   * rotations that put the end of the hand at `target` (world), with the elbow bent out
+   * toward `pole`. Leaves the arm in its rest pose; use setArm() to move it.
+   */
+  solveArm(target, pole) {
+    const up = this.upperArm, fo = this.foreArm, tip = this.handTip;
+    const wp = (o) => o.getWorldPosition(new THREE.Vector3());
+    const wq = (o) => o.getWorldQuaternion(new THREE.Quaternion());
+    this.setArm(0);
+    this.root.updateMatrixWorld(true);
+    const S = wp(up), E0 = wp(fo), T0 = wp(tip);
+    const L1 = S.distanceTo(E0), L2 = E0.distanceTo(T0);
+    const dir = target.clone().sub(S);
+    const d = Math.min(dir.length(), L1 + L2 - 1e-3);
+    dir.normalize();
+    const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    const side = pole.clone().sub(S);
+    side.addScaledVector(dir, -side.dot(dir)).normalize();
+    const E = S.clone().addScaledVector(dir, a).addScaledVector(side, h);
+    const T = S.clone().addScaledVector(dir, d);
+    // shoulder: swing the upper arm from where it points now onto the elbow
+    const q1 = new THREE.Quaternion().setFromUnitVectors(E0.clone().sub(S).normalize(), E.clone().sub(S).normalize());
+    up.quaternion.copy(wq(up.parent).invert().multiply(wq(up).premultiply(q1)));
+    this.root.updateMatrixWorld(true);
+    // elbow: swing the forearm onto the target
+    const En = wp(fo), Tn = wp(tip);
+    const q2 = new THREE.Quaternion().setFromUnitVectors(Tn.sub(En).normalize(), T.clone().sub(En).normalize());
+    fo.quaternion.copy(wq(up).invert().multiply(wq(fo).premultiply(q2)));
+    const solved = [up.quaternion.clone(), fo.quaternion.clone()];
+    this.setArm(0);
+    return solved;
+  }
+
+  /** Blend the right arm between rest (0) and a solved pose (1). */
+  setArm(t, solved = null) {
+    if (!this.armRest) return;
+    this.upperArm.quaternion.copy(this.armRest[0]);
+    this.foreArm.quaternion.copy(this.armRest[1]);
+    if (solved && t > 0) {
+      this.upperArm.quaternion.slerp(solved[0], t);
+      this.foreArm.quaternion.slerp(solved[1], t);
+    }
+  }
+
+  resetPose() {
+    this.setArm(0);
+    this.slump = 0;
+    this.idle = null;
+    this.lookTarget = null;
+  }
 
   /** Start an idle habit now (also used by tests): 'smoke' | 'glance' | 'shift'. */
   startIdle(kind) {
@@ -114,7 +173,9 @@ class Character {
     this._updateIdle(dt);
     this.root.position.y = this.baseY + Math.sin(t * 1.6 + this.phase) * 0.004;
     this.root.rotation.y = this.baseRotY + this.lean * 0.06;
-    this.root.rotation.z = this.lean * 0.025;
+    // slump tips him over toward his left (+x), away from his right hand
+    this.root.rotation.z = this.lean * 0.025 - this.slump * 0.42;
+    this.root.position.y -= this.slump * 0.05;
     if (!this.head) return;
     let ty = 0, tp = 0;
     if (this.lookTarget) {
@@ -129,9 +190,9 @@ class Character {
     this.pitch += (tp - this.pitch) * k;
     this.nod *= Math.exp(-6 * dt);
     this.head.rotation.set(
-      this.headRest.x + this.pitch + this.idlePitch + Math.sin(this.nod * 20) * this.nod * 0.3,
+      this.headRest.x + this.pitch + this.idlePitch + Math.sin(this.nod * 20) * this.nod * 0.3 + this.slump * 0.6,
       this.headRest.y + this.yaw + this.idleYaw,
-      this.headRest.z,
+      this.headRest.z - this.slump * 0.5,
     );
   }
 
@@ -263,21 +324,11 @@ export class BackRoom {
     this.smoke.update(dt);
   }
 
-  /** An eliminated player pushes back from the table and disappears into the dark. */
-  async leave(seat) {
+  /** Take an eliminated player out of the room (done while the screen is black). */
+  vanish(seat) {
     const c = this.characters[seat];
-    if (!c || c.gone) return;
-    const a = SEAT_ANGLES[seat];
-    const from = c.root.position.clone();
-    const out = new THREE.Vector3(Math.sin(a), 0, Math.cos(a)).multiplyScalar(0.9);
-    c.lookAt(null);
-    await this.tweens.add({
-      duration: 1.4, easing: ease.inOutQuad,
-      update: (t) => {
-        c.root.position.copy(from).addScaledVector(out, t);
-        c.root.position.y = from.y + Math.sin(Math.min(1, t * 2) * Math.PI / 2) * 0.25;
-      },
-    });
+    if (!c) return;
+    c.resetPose();
     c.gone = true;
     c.root.visible = false;
   }
@@ -290,7 +341,7 @@ export class BackRoom {
       const p = polar(a, SEAT_RADIUS + 0.06 + SIT_BACK, 0);
       c.root.position.set(p.x, 0, p.z);
       c.baseY = 0;
-      c.idle = null;
+      c.resetPose();
       c.root.visible = true;
       c.gone = false;
     });

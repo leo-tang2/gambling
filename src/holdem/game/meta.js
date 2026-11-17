@@ -4,6 +4,7 @@
 
 import { shuffledDeck } from '../engine/deck.js';
 import { nextSeat, activeCount } from '../engine/engine.js';
+import { preflopScore } from '../ai/preflop.js';
 
 export const FIRST_STAKE = 1000;
 
@@ -47,19 +48,7 @@ export function humanHoleIndexes(g) {
   return [52 - 1 - k, 52 - 1 - (n + k)];
 }
 
-/** Rough preflop strength of two cards (0..~20), Chen-formula style. */
-export function preflopScore(a, b) {
-  const ra = a % 13, rb = b % 13;
-  const hi = Math.max(ra, rb), lo = Math.min(ra, rb);
-  const val = (r) => (r === 12 ? 10 : r === 11 ? 8 : r === 10 ? 7 : r === 9 ? 6 : (r + 2) / 2);
-  let s = val(hi);
-  if (ra === rb) return Math.max(5, s * 2);
-  if (Math.floor(a / 13) === Math.floor(b / 13)) s += 2;
-  const gap = hi - lo - 1;
-  s -= gap <= 0 ? 0 : gap === 1 ? 1 : gap === 2 ? 2 : gap === 3 ? 4 : 5;
-  if (gap <= 1 && hi < 10) s += 1;
-  return s;
-}
+export { preflopScore };
 
 /**
  * Deck builder for the engine. Normally a plain fair shuffle. With luck, now and then it

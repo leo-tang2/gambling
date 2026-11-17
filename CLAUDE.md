@@ -94,4 +94,18 @@ glassDown, gulp, gunDrop, gunGrab, gunThrow, gunshot, knock, potSlide, puff, sli
 ## Models
 
 Built in Blender from `tools/blender/*.py` (the Blender MCP is installed on this PC). Export to
-`public/models/<name>.glb`. Characters are one body mesh plus a `Head` node; there are no rigs.
+`public/models/<name>.glb`. Characters are one body mesh plus a `Head` node and a posable right arm
+(`UpperArmR` pivots at the shoulder, `ForeArmR` at the elbow, empty `HandTipR` marks the hand's
+end); there are no rigs. `Character.solveArm()` in BackRoom.js reaches that hand to a point.
+The arms are measured for where the game seats them (`SEAT_DIST` in characters.py must match
+layout.js + `SIT_BACK`). Blender can also run headless:
+`blender --background --factory-startup --python <job.py>` with a job that sets `PROJECT_DIR`/`WHO`,
+execs the script and calls `lib.export_glb`.
+
+## Opponent AI
+
+`ai/decide.js`: preflop it plays a starting-hand chart (`preflopScore` thresholds per personality in
+`personalities.js`); after the flop it measures equity against the hands each opponent could hold
+given their public betting this hand (`ai/range.js`, engine stats `preRaises/raises/streetRaises/vpip`),
+so it folds to real aggression and bluffs/semi-bluffs at a per-personality rate. A broke opponent
+shoots himself (`_bustScene` in HoldemController); whoever wins a pot turns their cards up.

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createGame, startHand, applyAction, legalActions, playerView, potTotal } from '../engine/engine.js';
 import { decide } from '../ai/decide.js';
+import { evaluate, describeScore } from '../engine/evaluator.js';
 import { CAST, SMALL_BLIND, BIG_BLIND } from './cast.js';
 import { seatSpots, POT_SPOT, BOARD_SPOT, BOARD_CARD_SCALE, DECK_SPOT, TABLE_HEIGHT, EYE_HEIGHT, SEAT_ANGLES } from '../scene/layout.js';
 import { ChipStack, PotPile } from '../../shared/props/ChipManager.js';
@@ -362,6 +363,7 @@ export class HoldemController {
         sh.hole = [];
         sh.actor = -1;
         this.peeked = false;
+        this.revealed = new Set();
         for (let s = 0; s < 4; s++) hud.setStatus(s, '');
         await this._placeDealerButton(e.button);
         break;
@@ -403,10 +405,9 @@ export class HoldemController {
         sh.out[e.seat] = true;
         hud.setStatus(e.seat, 'Out', COLORS.smoke);
         if (e.seat !== 0) {
-          hud.say(e.seat, pick(this.cast[e.seat].lines.bust));
           hud.message(`${this.cast[e.seat].label} is out`, COLORS.redLight);
-          this.room.leave(e.seat);
-          this._muck(e.seat);
+          await this._muck(e.seat);
+          await this._bustScene(e.seat);
         }
         break;
       default:
@@ -607,6 +608,7 @@ export class HoldemController {
     this.hud.message('Showdown', COLORS.gold, 2.5);
     const flips = [];
     for (const h of e.hands) {
+      this.revealed?.add(h.seat);
       this.hud.setStatus(h.seat, h.name, COLORS.lampGlow);
       h.hole.forEach((v, i) => {
         const card = this.hole[h.seat][i];
@@ -620,7 +622,41 @@ export class HoldemController {
     await this.tweens.wait(1.3);
   }
 
+  /**
+   * Whoever wins turns their cards up, showdown or not, and the camera leans in on them.
+   * Only the main pot gets the close-up; a side-pot winner just flips.
+   */
+  async _showWinners(seats, zoom) {
+    if (this.peeking) await this._unpeek();
+    const flips = [];
+    for (const seat of seats) {
+      if (this.revealed?.has(seat)) continue;
+      this.revealed?.add(seat);
+      const values = this.game.players[seat].hole;
+      this.hole[seat].forEach((card, i) => {
+        if (!card) return;
+        if (seat !== 0) this.cards.setValue(card, values[i]);
+        if (card.userData.topShown) { card.userData.topShown = false; card.getObjectByName('flip').rotation[card.userData.flipAxis] = Math.PI; }
+        flips.push(this.cards.flip(card, true, { delay: flips.length * 0.1 }));
+      });
+      const board = this.game.board;
+      this.hud.setStatus(seat, board.length >= 3 ? describeScore(evaluate([...values, ...board])) : 'Shows', COLORS.lampGlow);
+    }
+    const cards = seats.flatMap((s) => this.hole[s].filter(Boolean));
+    if (!zoom || !cards.length || this.topView) { await Promise.all(flips); return; }
+    // lean in over the winning cards from below their bottom edge, so they read the right way
+    // up (a face-up card's top edge points along its local -Z; board cards at yaw 0 face you)
+    const center = cards.reduce((a, c) => a.add(c.position), V(0, 0, 0)).multiplyScalar(1 / cards.length);
+    const top = V(0, 0, -1).applyQuaternion(cards[0].getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize();
+    const wide = seats.length > 1 ? 0.25 : 0;
+    this.look.setShot(center.clone().addScaledVector(top, -(0.2 + wide)).add(V(0, 0.3 + wide, 0)), center, 46 + wide * 40);
+    await Promise.all([this._blendTo(1, 0.45), ...flips]);
+    await this.tweens.wait(1.3);
+    await this._blendTo(0, 0.45);
+  }
+
   async _award(e) {
+    await this._showWinners(e.winners.map((w) => w.seat), e.pot === 0);
     const potName = e.pot === 0 ? (this.game.lastHand?.pots?.length > 1 ? 'the main pot' : 'the pot') : `side pot ${e.pot}`;
     const names = e.winners.map((w) => this.cast[w.seat].label);
     const text = e.winners.length > 1
@@ -690,6 +726,108 @@ export class HoldemController {
       o.quaternion.identity();
     }
     this.fp.tremble = 0;
+  }
+
+  /** Turn the seated camera toward a world point (cutscenes). */
+  _faceToward(p, pitchBias = 0) {
+    const d = p.clone().sub(this.playerEye);
+    this.look.override = { yaw: Math.atan2(-d.x, -d.z), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) + pitchBias };
+  }
+
+  /**
+   * An opponent who goes broke doesn't walk out: he says his last words, brings a revolver
+   * up to his temple and pulls the trigger. Flash, he slumps, the screen cuts to black, and
+   * when the light comes back his chair is empty.
+   */
+  async _bustScene(seat) {
+    const ch = this.room.characters[seat];
+    if (!ch || ch.gone) return;
+    if (this.peeking) await this._unpeek();
+    if (this.topView) await this._exitTopView();
+    const u = this.pr.post.uniforms;
+    const lines = this.cast[seat].lines;
+    this.cutscene = true;
+    this.look.locked = true;
+    const head = this.room.headPosition(seat);
+    this._faceToward(head, -0.16);
+    for (let s = 1; s < 4; s++) if (s !== seat) this.room.characters[s]?.lookAt(head);
+    ch.lookAt(this.playerEye);
+
+    // a little warm light on him, the only time he's properly seen
+    if (!this.bustLight) {
+      this.bustLight = new THREE.PointLight(0xffb070, 0, 1.6, 2);
+      this.bustLight.name = 'BustLight';
+      this.room.scene.add(this.bustLight);
+    }
+    const light = this.bustLight;
+    const toTable = V(-head.x, 0, -head.z).normalize();
+    const hisRight = V(-1, 0, 0).applyQuaternion(ch.root.getWorldQuaternion(new THREE.Quaternion()));
+    // in front of him and out on his gun side, so the raised arm catches it too
+    light.position.copy(head).addScaledVector(toTable, 0.3).addScaledVector(hisRight, 0.38).add(V(0, 0.02, 0));
+    this.tweens.add({ duration: 0.9, update: (t) => { light.intensity = 1.5 * t; } });
+    this.hud.say(seat, pick(lines.lastWords), 3.4);
+    await this.tweens.wait(2.6);
+
+    // his right hand comes up with a revolver to his temple
+    let gun = null;
+    let solved = null;
+    if (ch.armRest && this.fp?.gun) {
+      ch.root.updateMatrixWorld(true);
+      const right = hisRight;
+      const neck = ch.head.getWorldPosition(V(0, 0, 0));
+      const temple = neck.clone().add(V(0, 0.13, 0)).addScaledVector(right, 0.06);
+      const target = neck.clone().add(V(0, 0.16, 0)).addScaledVector(right, 0.2).addScaledVector(toTable, 0.02);
+      const shoulder = ch.upperArm.getWorldPosition(V(0, 0, 0));
+      const pole = shoulder.clone().addScaledVector(right, 0.4).add(V(0, -0.3, 0)).addScaledVector(toTable, -0.05);
+      solved = ch.solveArm(target, pole);
+      ch.setArm(1, solved);
+      ch.root.updateMatrixWorld(true);
+      gun = this.fp.gun.clone(true);
+      gun.name = 'BustRevolver';
+      gun.visible = true;
+      gun.scale.setScalar(1.25); // reads at the far side of the table
+      this.room.scene.add(gun);
+      gun.position.copy(ch.handTip.getWorldPosition(V(0, 0, 0)));
+      gun.lookAt(temple); // the barrel runs along +Z, as in your own roulette scene
+      ch.foreArm.attach(gun);
+      ch.setArm(0);
+      ch.lookAt(null);
+      sound.play('gunGrab');
+      await this.tweens.add({ duration: 1.2, easing: ease.inOutQuad, update: (t) => ch.setArm(t, solved) });
+    }
+    // a beat of nothing
+    for (let s = 1; s < 4; s++) if (s !== seat) this.room.characters[s]?.lookAt(head);
+    await this.tweens.wait(1.5);
+
+    // bang
+    sound.play('gunshot');
+    light.position.copy(head).add(V(0, 0.1, 0));
+    light.intensity = 6;
+    u.tint.value.set(1, 0.93, 0.8);
+    u.tintAmount.value = 0.45;
+    this.look.shake = 0.1;
+    this.tweens.add({ duration: 0.12, update: (t) => { u.tintAmount.value = 0.45 * (1 - t); light.intensity = 6 * (1 - t) + 0.3; } });
+    await this.tweens.add({ duration: 0.35, easing: ease.outCubic, update: (t) => { ch.slump = t; } });
+    u.fade.value = 1;
+    u.tintAmount.value = 0;
+    light.intensity = 0;
+    await this.tweens.wait(1.2);
+
+    // lights up: the chair is empty
+    if (gun) { gun.removeFromParent(); }
+    this.room.vanish(seat);
+    await this._fade('fade', 0, 0.9);
+    const others = [1, 2, 3].filter((s) => s !== seat && !this.shown.out[s]);
+    if (others.length) {
+      const s = pick(others);
+      this.hud.say(s, pick(this.cast[s].lines.afterBust), 3);
+      this.room.characters[s]?.lookAt(this.playerEye);
+      await this.tweens.wait(1.8);
+    }
+    for (let s = 1; s < 4; s++) this.room.characters[s]?.lookAt(null);
+    this.look.override = null;
+    this.look.locked = false;
+    this.cutscene = false;
   }
 
   /** You're broke. Don Sal slides a revolver across the felt; you pick it up. */
