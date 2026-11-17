@@ -1,0 +1,6 @@
+node_modules
+dist
+screenshots
+*.blend
+*.blend1
+__pycache__
