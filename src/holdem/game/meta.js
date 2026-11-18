@@ -35,28 +35,65 @@ export function rouletteFires(bullets, luck = 0, rand = Math.random) {
 /** Chance that a hand is dealt "lucky" for a given luck level (drinks today, capped). */
 export const luckChance = (luck) => Math.min(0.4, 0.14 * Math.min(3, luck));
 
-/** Where in the deck the human's two hole cards will come from (cards are popped from the end). */
-export function humanHoleIndexes(g) {
+/**
+ * Where in the deck each seat's two hole cards will come from (cards are popped from the end):
+ * { seat: [i, j] } for every player still in the game.
+ */
+export function holeIndexes(g) {
   // mirrors startHand(): the button has already moved when the deck is built
   const order = [];
   let s = g.button;
   const n = activeCount(g);
   for (let i = 0; i < n; i++) { s = nextSeat(g, s); order.push(s); }
+  const out = {};
+  order.forEach((seat, k) => { out[seat] = [52 - 1 - k, 52 - 1 - (n + k)]; });
+  return out;
+}
+
+/** Where in the deck the human's two hole cards will come from. */
+export function humanHoleIndexes(g) {
   const human = g.players.findIndex((p) => p.isHuman);
-  const k = order.indexOf(human);
-  if (k < 0) return null;
-  return [52 - 1 - k, 52 - 1 - (n + k)];
+  return holeIndexes(g)[human] ?? null;
 }
 
 export { preflopScore };
 
 /**
- * Deck builder for the engine. Normally a plain fair shuffle. With luck, now and then it
- * shuffles a few decks and keeps the one that deals the human the best starting hand.
- * Nothing tells the player this happened.
+ * About one hand in ten is dealt "lively": everyone at the table gets something worth playing,
+ * so more people stay in and pots go to a real showdown. Nine in ten are a plain shuffle.
+ */
+export const LIVELY_CHANCE = 0.1;
+const LIVELY_TRIES = 12;
+
+/** The weakest starting hand anyone is dealt from this deck. */
+export function weakestHand(deck, idx) {
+  let min = Infinity;
+  for (const [i, j] of Object.values(idx)) min = Math.min(min, preflopScore(deck[i], deck[j]));
+  return min;
+}
+
+/** Shuffle a few decks and keep the one whose weakest starting hand is the strongest. */
+export function livelyDeck(g) {
+  const idx = holeIndexes(g);
+  let best = shuffledDeck(g.rng);
+  let bestScore = weakestHand(best, idx);
+  for (let i = 1; i < LIVELY_TRIES; i++) {
+    const d = shuffledDeck(g.rng);
+    const sc = weakestHand(d, idx);
+    if (sc > bestScore) { best = d; bestScore = sc; }
+  }
+  return best;
+}
+
+/**
+ * Deck builder for the engine. Normally a plain fair shuffle. One hand in ten everyone is dealt
+ * something playable (livelyDeck). With drink luck, now and then it shuffles a few decks and
+ * keeps the one that deals the human the best starting hand. Nothing tells the player either
+ * happened.
  */
 export function makeLuckyDeckFn(getLuck, rand = Math.random) {
   return (g) => {
+    if (rand() < LIVELY_CHANCE) return livelyDeck(g);
     const luck = getLuck();
     const deck = shuffledDeck(g.rng);
     if (!luck || rand() >= luckChance(luck)) return deck;

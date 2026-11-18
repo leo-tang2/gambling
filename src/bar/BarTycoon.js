@@ -403,7 +403,7 @@ export class BarTycoon {
     }
     const want = this.mode === 'catalog' ? 1 : 0;
     this.offset += (want - this.offset) * (1 - Math.exp(-5 * dt));
-    this.world.hemi.intensity = 0.9 + this.offset * 1.0; // a little more light to shop by
+    this.world.hemi.intensity = 0.9 + this.offset * 2.4; // more light to shop by
     cam.position.copy(this.cam.pos);
     cam.lookAt(this.cam.target);
     const w = this.pr.width, h = this.pr.height;

@@ -31,6 +31,8 @@ you're in your seat.
 - **3** (or the Raise... button) opens a box where you type the amount to raise to. Min, 1/2 Pot,
   Pot and All in fill it in; **Enter** confirms, **Esc** cancels.
 - **Q:** puff on your cigar, if you took one.
+- **F:** once you've folded and two or more others are still in, skip ahead: the screen goes
+  black, the rest of the hand plays out, and it comes back as the winner turns their cards over.
 
 Everyone at the table, their money and what they last did is listed bottom-right, above your hand.
 When cards land on the board the camera zooms in on them for a moment. Whoever wins a pot turns
@@ -138,7 +140,8 @@ lib.export_glb([bpy.data.objects['Table']], 'table.glb')
 ```
 
 Characters take `WHO = 'boss' | 'enforcer' | 'shark'` before running `characters.py`.
-`firstperson.py` builds the revolver and your hands (exported together as `firstperson.glb`).
+`firstperson.py` builds the revolver and your hands: gripping, open (reaching for the gun) and flat
+(peeking at cards), exported together as `firstperson.glb`.
 `bar.py` builds everything for your bar into `bar.glb` (export `BAR_OBJECTS`): the bartender, the
 regulars and Lou the bookie (each with a `Head` and a posable right arm), the horse-race table, the
 four horses and the crown, the shooting gallery booth, ducks and cans, a pint and the beer tap.

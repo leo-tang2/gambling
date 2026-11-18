@@ -3,6 +3,7 @@ import { createGame, startHand } from '../src/holdem/engine/engine.js';
 import {
   mafiaMood, rouletteWinnings, ROULETTE_BONUS, rouletteFires, splitCashOut, humanHoleIndexes,
   makeLuckyDeckFn, preflopScore, nextEventGap, BAR_ITEMS, nextNight, newRun,
+  holeIndexes, livelyDeck, LIVELY_CHANCE,
 } from '../src/holdem/game/meta.js';
 
 describe('next night', () => {
@@ -91,6 +92,54 @@ describe('hidden luck', () => {
       return total / 1200;
     };
     expect(avg(3)).toBeGreaterThan(avg(0));
+  });
+
+  it('knows where every seat\'s hole cards come from', () => {
+    for (let t = 0; t < 20; t++) {
+      const g = createGame({ players: players() });
+      let idx = null;
+      let deckSeen = null;
+      g.deckFn = (game) => {
+        idx = holeIndexes(game);
+        deckSeen = Array.from({ length: 52 }, (_, i) => i).sort(() => Math.random() - 0.5);
+        return deckSeen.slice();
+      };
+      startHand(g);
+      g.players.forEach((p, seat) => expect(p.hole).toEqual([deckSeen[idx[seat][0]], deckSeen[idx[seat][1]]]));
+    }
+  });
+
+  it('makes the weakest starting hand at the table stronger on a lively deal', () => {
+    const avgWeakest = (fn) => {
+      let total = 0;
+      for (let i = 0; i < 600; i++) {
+        const g = createGame({ players: players() });
+        let idx = null;
+        g.deckFn = (game) => { idx = holeIndexes(game); return fn(game); };
+        startHand(g);
+        total += Math.min(...g.players.map((p) => preflopScore(p.hole[0], p.hole[1])));
+        expect(Object.keys(idx)).toHaveLength(4);
+      }
+      return total / 600;
+    };
+    const plain = avgWeakest(makeLuckyDeckFn(() => 0, () => 0.99));
+    const lively = avgWeakest(livelyDeck);
+    expect(lively).toBeGreaterThan(plain + 1.5);
+  });
+
+  it('deals lively only when the roll comes up under one in ten', () => {
+    expect(LIVELY_CHANCE).toBe(0.1);
+    const avgWeakest = (roll) => {
+      let total = 0;
+      for (let i = 0; i < 400; i++) {
+        const g = createGame({ players: players() });
+        g.deckFn = makeLuckyDeckFn(() => 0, () => roll);
+        startHand(g);
+        total += Math.min(...g.players.map((p) => preflopScore(p.hole[0], p.hole[1])));
+      }
+      return total / 400;
+    };
+    expect(avgWeakest(0.09)).toBeGreaterThan(avgWeakest(0.1) + 1.5);
   });
 });
 

@@ -484,6 +484,161 @@ tap = lib.join([lib.box('base', (0.5, 0.08, 0.06), (0, 0, 0.03), atlas=pa, mat=p
                'BeerTap')
 lib.flat_shade(tap)
 
+# ====================================================================================
+# Furniture and decorations that fill the room
+# ====================================================================================
+f = lib.Atlas('furniture', 64, 64, bg='wood', seed=80)
+for key, rect in {
+    'wood': (0, 0, 16, 16), 'woodDark': (16, 0, 16, 16), 'leather': (32, 0, 16, 16), 'brass': (48, 0, 8, 8),
+    'iron': (56, 0, 8, 8), 'barrel': (0, 16, 16, 16), 'crate': (16, 16, 16, 16), 'crateTop': (32, 16, 16, 16),
+    'rug': (0, 32, 32, 20), 'glass': (48, 8, 8, 8), 'coat': (48, 16, 8, 16), 'hat': (56, 16, 8, 8),
+    'tuft': (32, 32, 16, 16), 'paintA': (48, 32, 16, 20), 'paintB': (0, 52, 16, 12), 'paintC': (16, 52, 16, 12),
+    'frame': (32, 48, 8, 8), 'candle': (40, 48, 8, 8), 'band': (56, 24, 8, 8),
+}.items():
+    f.region(key, *rect)
+f.fill('wood', 'wood'); f.noise('wood', ['woodLight', 'woodMid'], 0.25); f.hlines('wood', 'woodMid', every=5)
+f.fill('woodDark', 'woodDark'); f.noise('woodDark', ['wood', 'black'], 0.2)
+f.fill('leather', 'red'); f.noise('leather', ['redMid', 'bloodMid'], 0.2)
+f.fill('brass', 'gold'); f.noise('brass', ['amber', 'goldLight'], 0.3)
+f.fill('iron', 'ash'); f.noise('iron', ['ashDark', 'smoke'], 0.3)
+f.fill('barrel', 'woodLight'); f.vlines('barrel', 'wood', every=3); f.hlines('barrel', 'ash', every=16, offset=3)
+f.hlines('barrel', 'ash', every=16, offset=12)
+f.fill('crate', 'leather'); f.hlines('crate', 'woodLight', every=5); f.vlines('crate', 'wood', every=16, offset=0)
+for i in range(16):
+    f.set(16 + i, 16 + i, 'wood'); f.set(16 + i, 31 - i, 'wood')  # cross brace
+f.fill('crateTop', 'woodLight'); f.vlines('crateTop', 'leather', every=4)
+f.art('crateTop', ['................', '................', '................', '................', '................',
+                   '...RRR.RRR.R....', '...R.R.R...R....', '...RR..RR..R....', '...R.R.R...R....', '...RRR.RRR.RRR..'],
+      {'R': 'red'})  # "BEER" stencil-ish
+# a red rug with a gold border and a diamond in the middle
+x0, y0 = 0, 32
+for j in range(20):
+    for i in range(32):
+        c = 'red'
+        if i in (0, 31) or j in (0, 19):
+            c = 'gold'
+        elif i in (2, 29) or j in (2, 17):
+            c = 'bloodMid'
+        elif abs(i - 15.5) / 12 + abs(j - 9.5) / 6 < 1:
+            c = 'redLight' if abs(i - 15.5) / 12 + abs(j - 9.5) / 6 > 0.7 else 'amberDark'
+        f.set(x0 + i, y0 + j, c)
+f.fill('glass', 'lampGlow')
+f.fill('coat', 'navy'); f.vlines('coat', 'navyLight', every=4)
+f.fill('hat', 'ink'); f.hlines('hat', 'red', every=8, offset=5)
+f.fill('tuft', 'red')
+for j in range(2, 16, 5):
+    for i in range(2, 16, 5):
+        f.set(32 + i, 32 + j, 'bloodDark')
+f.fill('band', 'ash')
+# three little paintings: a boxer, a ship at night, a racehorse
+f.art('paintA', ['bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb', 'bbbbbbsssbbbbbbb', 'bbbbbbsssbbbbbbb', 'bbbbbbbsbbbbbbbb',
+                 'bbbbrssssssrbbbb', 'bbbrrsssssssrrbb', 'bbbrrbssssbbrrbb', 'bbbbbbssssbbbbbb', 'bbbbbbkkkkbbbbbb',
+                 'bbbbbbkkkkbbbbbb', 'bbbbbbsbbsbbbbbb', 'bbbbbbsbbsbbbbbb', 'bbbbbbsbbsbbbbbb', 'bbbbbkkbbkkbbbbb',
+                 'ggggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg'],
+      {'b': 'navy', 's': 'skin', 'r': 'redLight', 'k': 'ink', 'g': 'feltMid'})
+f.art('paintB', ['nnnnnnnnnnnnnnnn', 'nnnnnynnnnnnnnnn', 'nnnnnnnnnnnnyynn', 'nnnnnnwnnnnnyynn', 'nnnnnwwwnnnnnnnn',
+                 'nnnnwwwwwnnnnnnn', 'nnbbbbbbbbbbnnnn', 'nnnbbbbbbbbnnnnn', 'llllllllllllllll', 'LlLlLlLlLlLlLlLl',
+                 'llllllllllllllll', 'LLLLLLLLLLLLLLLL'], {'n': 'navy', 'y': 'gold', 'w': 'paper', 'b': 'woodDark', 'l': 'blue', 'L': 'navyLight'})
+f.art('paintC', ['ssssssssssssssss', 'ssssssssssssssss', 'sssssssshhsshsss', 'ssssshhhhhhhhsss', 'sssshhhhhhhhssss',
+                 'ssshhhhhhhhsssss', 'sssshhshhshsssss', 'ssssshsshsssssss', 'gggggggggggggggg', 'gggggggggggggggg',
+                 'GGGGGGGGGGGGGGGG', 'gggggggggggggggg'], {'s': 'amberMid', 'h': 'woodDark', 'g': 'sage', 'G': 'feltLight'})
+f.fill('frame', 'gold'); f.noise('frame', ['amber'], 0.3)
+f.fill('candle', 'cream')
+fm = f.material('Furniture')
+fglow = f.material('FurnitureGlow', emissive='lampGlow', emissive_strength=2.0)
+FB = lambda n, size, loc, faces, mat=fm, **kw: lib.box(n, size, loc, atlas=f, mat=mat, faces=faces, **kw)
+FC = lambda n, r0, r1, h, loc, side, top=None, seg=12, mat=fm, **kw: lib.cylinder(n, r0, r1, h, seg, loc=loc, atlas=f,
+                                                                                 side=side, top=top or side, mat=mat, **kw)
+
+
+def finish(parts, name):
+    o = lib.join(parts, name)
+    lib.flat_shade(o)
+    return o
+
+
+# small round cafe table (top at 0.74 m)
+cafe_table = finish([
+    FC('top', 0.4, 0.4, 0.045, (0, 0, 0.72), 'woodDark', 'wood', seg=14),
+    FC('rim', 0.41, 0.41, 0.015, (0, 0, 0.695), 'brass', seg=14),
+    FC('post', 0.04, 0.05, 0.66, (0, 0, 0.36), 'iron', seg=8),
+    FC('foot', 0.24, 0.27, 0.04, (0, 0, 0.02), 'iron', seg=10),
+], 'CafeTable')
+
+# bentwood chair with a red leather seat; faces -Y (it's sat on facing +Z in game)
+cp = [FC('seat', 0.2, 0.2, 0.05, (0, 0, 0.46), 'leather', seg=12),
+      FC('seatRim', 0.21, 0.21, 0.02, (0, 0, 0.43), 'woodDark', seg=12)]
+for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+    cp.append(FB('leg', (0.03, 0.03, 0.46), (sx * 0.13, sy * 0.13, 0.215), {'default': 'woodDark'},
+                 rot=(math.radians(-sy * 5), math.radians(sx * 5), 0)))
+cp.append(FB('ring', (0.28, 0.02, 0.02), (0, -0.13, 0.18), {'default': 'woodDark'}))
+for sx in (-1, 1):
+    cp.append(FB('backPost', (0.03, 0.03, 0.5), (sx * 0.15, 0.17, 0.72), {'default': 'woodDark'}, rot=(math.radians(-8), 0, 0)))
+cp.append(FB('backRail', (0.34, 0.035, 0.07), (0, 0.2, 0.94), {'default': 'woodDark'}, rot=(math.radians(-8), 0, 0)))
+cp.append(FB('backRail2', (0.3, 0.025, 0.04), (0, 0.19, 0.78), {'default': 'woodDark'}, rot=(math.radians(-8), 0, 0)))
+cafe_chair = finish(cp, 'CafeChair')
+
+# a booth bench against a wall: padded red leather, tall back (faces -Y)
+BW = 1.5
+bp = [FB('base', (BW, 0.5, 0.42), (0, 0, 0.21), {'default': 'woodDark'}),
+      FB('cushion', (BW - 0.04, 0.5, 0.1), (0, -0.02, 0.47), {'default': 'tuft'}),
+      FB('back', (BW - 0.04, 0.14, 0.62), (0, 0.2, 0.83), {'default': 'woodDark', '-y': 'tuft'}),
+      FB('cap', (BW + 0.02, 0.2, 0.05), (0, 0.2, 1.16), {'default': 'wood'})]
+for sx in (-1, 1):
+    bp.append(FB('arm', (0.06, 0.52, 0.62), (sx * (BW / 2 - 0.01), 0.0, 0.31), {'default': 'wood'}))
+booth = finish(bp, 'Booth')
+
+booth_table = finish([
+    FB('top', (1.2, 0.62, 0.05), (0, 0, 0.73), {'default': 'woodDark', '+z': 'wood'}),
+    FB('edge', (1.22, 0.64, 0.02), (0, 0, 0.705), {'default': 'brass'}),
+    FB('post', (0.08, 0.08, 0.7), (0, 0, 0.35), {'default': 'iron'}),
+    FB('foot', (0.6, 0.3, 0.04), (0, 0, 0.02), {'default': 'iron'}),
+], 'BoothTable')
+
+barrel = finish([
+    lib.lathe('staves', [(0.23, 0.0), (0.27, 0.2), (0.28, 0.32), (0.27, 0.44), (0.23, 0.64)], 12, atlas=f,
+              bands='barrel', cap_top='crateTop', cap_bottom='crateTop', mat=fm),
+    lib.lathe('hoop1', [(0.275, 0.12), (0.275, 0.15)], 12, atlas=f, bands='band', mat=fm),
+    lib.lathe('hoop2', [(0.275, 0.5), (0.275, 0.53)], 12, atlas=f, bands='band', mat=fm),
+], 'Barrel')
+
+crate = finish([FB('box', (0.5, 0.4, 0.38), (0, 0, 0.19), {'default': 'crate', '+z': 'crateTop'})], 'Crate')
+
+coat_rack = finish([
+    FC('foot', 0.2, 0.24, 0.04, (0, 0, 0.02), 'woodDark', seg=10),
+    FC('pole', 0.025, 0.03, 1.75, (0, 0, 0.9), 'woodDark', seg=8),
+    FC('knob', 0.04, 0.04, 0.04, (0, 0, 1.79), 'brass', seg=8),
+] + [FB('hook', (0.16, 0.02, 0.02), (math.cos(a) * 0.07, math.sin(a) * 0.07, 1.68), {'default': 'brass'},
+        rot=(0, math.radians(-25), a)) for a in (0, 2.1, 4.2)] + [
+    FB('coat', (0.34, 0.14, 0.8), (0.12, 0.0, 1.2), {'default': 'coat'}, taper=(0.55, 0.8)),
+    lib.lathe('hatBrim', [(0.0, 0.0), (0.17, 0.0), (0.17, 0.012), (0.0, 0.012)], 10, loc=(-0.08, 0.06, 1.72), atlas=f, bands='hat', mat=fm),
+    lib.lathe('hatTop', [(0.1, 0.0), (0.1, 0.09), (0.06, 0.11), (0.0, 0.1)], 8, loc=(-0.08, 0.06, 1.73), atlas=f, bands='hat', mat=fm),
+], 'CoatRack')
+
+# wall lamp: an iron bracket and a glowing glass shade (wall behind it at +Y)
+sconce = finish([
+    FB('plate', (0.1, 0.02, 0.16), (0, 0.0, 0), {'default': 'brass'}),
+    FB('arm', (0.02, 0.14, 0.02), (0, -0.07, 0.02), {'default': 'iron'}),
+], 'Sconce')
+sconce_glass = finish([FC('shade', 0.05, 0.07, 0.12, (0, -0.15, 0.06), 'glass', seg=8, mat=fglow)], 'SconceGlass')
+attach(sconce_glass, sconce)
+
+frames = []
+for key, size, name in (('paintA', (0.42, 0.52), 'Frame_A'), ('paintB', (0.5, 0.38), 'Frame_B'), ('paintC', (0.5, 0.38), 'Frame_C')):
+    w, h = size
+    frames.append(finish([
+        FB('frame', (w + 0.08, 0.04, h + 0.08), (0, 0.0, 0), {'default': 'frame'}),
+        FB('canvas', (w, 0.02, h), (0, -0.02, 0), {'default': 'frame', '-y': key}),
+    ], name))
+
+rug = finish([FB('rug', (2.4, 1.5, 0.012), (0, 0, 0.006), {'default': 'rug'})], 'Rug')
+spittoon = finish([lib.lathe('pot', [(0.0, 0.0), (0.1, 0.0), (0.13, 0.08), (0.09, 0.16), (0.12, 0.2)], 10, atlas=f,
+                             bands='brass', cap_bottom='brass', mat=fm)], 'Spittoon')
+candle = finish([FC('jar', 0.035, 0.035, 0.07, (0, 0, 0.035), 'glass', seg=8, mat=fglow),
+                 FC('wax', 0.025, 0.025, 0.02, (0, 0, 0.08), 'candle', seg=8)], 'CandleJar')
+
+FURNITURE = [cafe_table, cafe_chair, booth, booth_table, barrel, crate, coat_rack, sconce, rug, spittoon, candle] + frames
+
 people = [person(n, S) for n, S in PEOPLE.items()]
 
 # lay everything out for the preview render (the game places things itself)
@@ -498,5 +653,7 @@ place(duck, (3.2, 2.05, 1.32))
 place(can, (3.6, 2.25, 1.77))
 place(pint, (1.4, 0, 1.0))
 place(tap, (1.8, 0, 1.0))
-BAR_OBJECTS = people + [track] + horses + [crown, gallery, duck, can, pint, tap]
+for i, o in enumerate(FURNITURE):
+    place(o, (-3.0 + (i % 6) * 1.2, -2.5 - (i // 6) * 1.6, 0.0 if o.name != 'Sconce' and not o.name.startswith('Frame') else 1.4))
+BAR_OBJECTS = people + [track] + horses + [crown, gallery, duck, can, pint, tap] + FURNITURE
 print('built', [o.name for o in BAR_OBJECTS])

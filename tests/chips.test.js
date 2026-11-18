@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { pipLayout } from '../src/shared/props/CardManager.js';
 import { stackBreakdown, greedyBreakdown, takeValue, takeExact, sumValue } from '../src/shared/props/chipMath.js';
 
 describe('chip arithmetic', () => {
@@ -34,6 +35,15 @@ describe('chip arithmetic', () => {
       const { taken, remaining } = takeExact(chips, amount);
       expect(sumValue(taken)).toBe(amount);
       expect(sumValue(remaining)).toBe(total - amount);
+    }
+  });
+});
+
+describe('card faces', () => {
+  it('shows as many pips as the card is worth, 2 to 10', () => {
+    for (let suit = 0; suit < 4; suit++) {
+      for (let rank = 0; rank <= 8; rank++) expect(pipLayout(suit * 13 + rank)).toHaveLength(rank + 2);
+      for (let rank = 9; rank <= 12; rank++) expect(pipLayout(suit * 13 + rank)).toHaveLength(0); // J Q K A are drawn differently
     }
   });
 });

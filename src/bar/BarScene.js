@@ -4,6 +4,14 @@ import { paintTexture, hashNoise } from '../shared/render/textures.js';
 import { drawText, textWidth } from '../shared/ui/font.js';
 import { makeBartender, makeGlass, makeAshtray, Smoke } from '../holdem/scene/Extras.js';
 import { Character } from '../holdem/scene/BackRoom.js';
+import { ease } from '../shared/anim/Tweens.js';
+
+/** Up with a snap and a hair of overshoot, hold, then down smoothly: 0..1 over a reach. */
+function reachCurve(t, up, hold, down) {
+  if (t < up) return ease.outBack(t / up);
+  if (t < up + hold) return 1;
+  return 1 - ease.inOutCubic(Math.min(1, (t - up - hold) / down));
+}
 import { HORSES } from './horseRace.js';
 
 // Your own bar, as a room you walk around in. Metres; +z points from the counter to the
@@ -600,8 +608,7 @@ class Regular {
     }
     if (this.solved) {
       this.t += dt;
-      const k = Math.sin(Math.min(1, this.t / 2.6) * Math.PI);
-      ch.setArm(Math.min(1, k * 1.4), this.solved);
+      ch.setArm(reachCurve(this.t, 0.55, 1.2, 0.85), this.solved);
       if (this.t >= 2.6) { this.solved = null; ch.setArm(0); this.next = 5 + Math.random() * 8; }
     }
   }
@@ -712,8 +719,7 @@ class Bartender {
         break;
       case 'pull': {
         this.wantFacing = Math.PI;
-        const k = j.t < 0.6 ? j.t / 0.6 : j.t < 1.4 ? 1 : Math.max(0, 1 - (j.t - 1.4) / 0.5);
-        ch.setArm(k, j.solved);
+        ch.setArm(reachCurve(j.t, 0.5, 0.9, 0.5), j.solved);
         if (j.t > 0.6 && !j.pint) {
           j.pint = makePint(this.models);
           ch.handTip.add(j.pint);
@@ -732,8 +738,7 @@ class Bartender {
         break;
       case 'place': {
         this.wantFacing = 0;
-        const k = j.t < 0.6 ? j.t / 0.6 : Math.max(0, 1 - (j.t - 0.75) / 0.5);
-        ch.setArm(Math.min(1, k), j.solved);
+        ch.setArm(reachCurve(j.t, 0.55, 0.2, 0.5), j.solved);
         if (j.t > 0.6 && j.pint) {
           // let go: the pint stands on the counter and slides over to the customer
           this.world.scene.attach(j.pint);
@@ -784,6 +789,7 @@ export class BarScene {
     this._buildRoom();
     this._buildCounter();
     this._buildTables();
+    this._buildDecor();
 
     const ctx = { models, scene: this };
     for (const id of Object.keys(BUILDERS)) {
@@ -970,6 +976,73 @@ export class BarScene {
       light(g, 'amber', 1.0, 2.2, -0.1, 0.95, -0.15, 2);
       this.colliders.push([T.x - 0.55, T.z - 0.55, T.x + 0.55, T.z + 0.55]);
     });
+  }
+
+  /**
+   * Fill the room: cafe tables with chairs, booths under the windows, barrels and crates in the
+   * back corner, a coat rack by the door, wall lamps, pictures, a rug and a spittoon.
+   * All from bar.glb; anything missing is simply left out.
+   */
+  _buildDecor() {
+    const s = this.scene;
+    const put = (name, x, z, rotY = 0, y = 0, solid = null) => {
+      const o = fromModel(this.models, name);
+      if (!o) return null;
+      o.position.set(x, y, z);
+      o.rotation.y = rotY;
+      s.add(o);
+      if (solid) this.colliders.push([x - solid, z - solid, x + solid, z + solid]);
+      return o;
+    };
+    // cafe tables, two chairs each, a candle in a jar on top
+    const cafes = [
+      [-3.9, 2.7, [0.4, Math.PI + 0.4]],
+      [0.4, -0.55, [Math.PI / 2, -Math.PI / 2]],
+      [6.0, -0.35, [Math.PI * 0.75, -Math.PI * 0.25]],
+      [-1.1, 2.75, [0, Math.PI]],
+    ];
+    for (const [x, z, angles] of cafes) {
+      if (!put('CafeTable', x, z, 0, 0, 0.42)) continue;
+      put('CandleJar', x + 0.08, z - 0.05, 0, 0.745);
+      light(s, 'amber', 0.8, 1.8, x + 0.08, 0.95, z - 0.05, 2);
+      for (const a of angles) {
+        const cx = x + Math.sin(a) * 0.62, cz = z + Math.cos(a) * 0.62;
+        put('CafeChair', cx, cz, Math.atan2(x - cx, z - cz), 0, 0.22);
+      }
+    }
+    // booths along the street wall under the windows, a table in front of each
+    for (const x of [-2.2, 1.9]) {
+      if (!put('Booth', x, 4.7, Math.PI)) continue;
+      this.colliders.push([x - 0.78, 4.42, x + 0.78, ROOM.z1]);
+      put('BoothTable', x, 3.95, 0, 0, null);
+      this.colliders.push([x - 0.62, 3.63, x + 0.62, 4.27]);
+      put('CandleJar', x - 0.3, 3.95, 0, 0.755);
+      const gl = makePint(this.models);
+      gl.position.set(x + 0.25, 0.755, 3.9);
+      gl.scale.setScalar(0.85);
+      s.add(gl);
+    }
+    // the back corner: barrels and crates
+    put('Barrel', 2.95, -4.5, 0, 0, 0.3);
+    put('Barrel', 3.55, -4.55, 0.6, 0, 0.3);
+    put('Barrel', 3.25, -4.5, 1.1, 0.64);
+    put('Crate', 4.3, -4.55, 0.1, 0, 0.3);
+    put('Crate', 4.3, -4.55, -0.15, 0.38);
+    put('Crate', 4.35, -3.95, 0.5, 0, 0.28);
+    put('CoatRack', -6.55, 4.55, 0.6, 0, 0.22);
+    put('Spittoon', 1.95, -2.15, 0, 0, 0.14);
+    // a rug in the middle of the floor, under the cafe table
+    put('Rug', 0.4, -0.55, 0, 0.002);
+    // wall lamps, each a real little light
+    for (const [x, z, rot] of [[-6.97, -3.4, Math.PI / 2], [-6.97, 2.3, Math.PI / 2], [6.97, -0.9, -Math.PI / 2], [-5.6, 4.97, Math.PI]]) {
+      if (!put('Sconce', x, z, rot, 2.05)) continue;
+      const out = V(Math.sin(rot), 0, Math.cos(rot));
+      light(s, 'lampGlow', 1.3, 3.6, x + out.x * 0.25, 2.1, z + out.z * 0.25, 1.8);
+    }
+    // pictures on the walls
+    put('Frame_A', -6.97, -0.1, Math.PI / 2, 1.75);
+    put('Frame_B', 6.97, 4.25, -Math.PI / 2, 1.8);
+    put('Frame_C', -4.9, 4.97, Math.PI, 1.85);
   }
 
   _buildPeople(models) {

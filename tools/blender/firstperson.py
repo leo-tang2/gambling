@@ -56,6 +56,23 @@ grip = lib.join(h, 'HandGrip')
 lib.flat_shade(grip)
 grip.location = (0.4, 0, 0)
 
+# ---- open hand reaching for the revolver: same wrist, cuff and sleeve as HandGrip, so the game
+# can swap one for the other the moment the fingers close ----
+o = []
+o.append(B('palm', (0.03, 0.06, 0.085), (0.0, 0.055, -0.02), rot=(math.radians(-18), 0, 0), faces={'default': 'skin', '-x': 'skinDark'}))
+for i in range(4):
+    z = 0.012 - i * 0.022
+    ln = 0.068 if i in (1, 2) else 0.058
+    # fingers straight out in front of the palm, fanned a little, not yet curled round anything
+    o.append(B('finger', (0.017, ln, 0.017), (-0.004 - i * 0.002, 0.03 - ln / 2, z - i * 0.004),
+               rot=(math.radians(-6 - i * 5), 0, math.radians(-4)), faces={'default': 'skin', '-y': 'nail', '-x': 'skinDark'}))
+o.append(B('thumb', (0.016, 0.05, 0.018), (0.024, 0.012, 0.048), rot=(math.radians(-35), 0, math.radians(-38)), faces={'default': 'skin', '-y': 'nail'}))
+o.append(B('cuff', (0.06, 0.04, 0.07), (0.0, 0.11, -0.04), rot=(math.radians(-18), 0, 0), faces={'default': 'cuff'}))
+o.append(B('sleeve', (0.08, 0.32, 0.09), (0.0, 0.28, -0.08), rot=(math.radians(-14), 0, 0), faces={'default': 'sleeve'}, taper=(1.08, 1.0)))
+open_hand = lib.join(o, 'HandOpen')
+lib.flat_shade(open_hand)
+open_hand.location = (1.2, 0, 0)
+
 # ---- flat hand for tipping a card corner (fingertips at the origin) ----
 p = []
 p.append(B('palm', (0.08, 0.09, 0.025), (0.0, 0.085, 0.015), faces={'default': 'skin', '-z': 'skinDark'}))

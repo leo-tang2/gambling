@@ -72,6 +72,7 @@ export class HoldemController {
       if (k === 'e' && !e.repeat) this.togglePeek();
       if (k === 'v' && !e.repeat) this.toggleTopView();
       if (k === 'q' && !e.repeat) this.side.puff();
+      if (k === 'f' && !e.repeat) this.fastForward();
       if (e.key === 'Enter' && this.phase === 'menu') this.startFromMenu(!!this.savedRun);
     });
   }
@@ -91,6 +92,7 @@ export class HoldemController {
   // ---------------- menu & lifecycle ----------------
 
   newGame() {
+    if (this.ff) { this.tweens.timeScale = this.ff.prevScale; this.ff = null; }
     const day = this.run.day;
     this.game = createGame({
       players: CAST.map((c) => ({ id: c.id, name: c.short, isHuman: !!c.isHuman, stack: c.isHuman ? this.run.stake : opponentStack(day) })),
@@ -187,6 +189,44 @@ export class HoldemController {
     this.newGame();
     this.showMenu();
     await this._fade('fadeAll', 0, 0.7);
+  }
+
+  // ---------------- F: skip to the end of a hand you've folded ----------------
+
+  /** True while you've folded and two or more others are still playing the hand out. */
+  canFastForward() {
+    const g = this.game;
+    if (!g || this.phase !== 'playing' || this.cutscene || this.ff || g.street === 'done') return false;
+    if (!this.shown.folded[0]) return false;
+    return g.players.filter((p) => !p.folded && !p.out).length >= 2;
+  }
+
+  /**
+   * F after folding: the screen snaps to black, the rest of the hand plays out unseen at high
+   * speed, and the lights come back up just as the winner turns their cards over.
+   */
+  async fastForward() {
+    if (!this.canFastForward()) return;
+    if (this.topView) this._exitTopViewNow();
+    const ff = { prevScale: this.tweens.timeScale };
+    this.ff = ff;
+    ff.fading = this._fade('fadeAll', 1, 0.16);
+    await ff.fading;
+    if (this.ff === ff) this.tweens.timeScale = Math.max(40, ff.prevScale * 40);
+  }
+
+  /** The hand reached its end: back to normal speed and fade in on the result. */
+  async _endFastForward() {
+    const ff = this.ff;
+    if (!ff) return;
+    this.ff = null;
+    await ff.fading;
+    this.tweens.timeScale = ff.prevScale;
+    // nothing said in the dark lingers on screen
+    this.hud.messages.length = 0;
+    for (const p of this.hud.plates) p.speech = null;
+    this.look.blend = 0;
+    await this._fade('fadeAll', 0, 0.35);
   }
 
   // ---------------- cashing out, the overview, your bar ----------------
@@ -403,9 +443,11 @@ export class HoldemController {
         await this._dealBoard(e.cards, e.street);
         break;
       case 'showdown':
+        if (this.ff) await this._endFastForward();
         await this._showdown(e);
         break;
       case 'award':
+        if (this.ff) await this._endFastForward();
         await this._award(e);
         break;
       case 'eliminated':
@@ -432,15 +474,15 @@ export class HoldemController {
       case 'fold':
         hud.setStatus(seat, 'Fold', COLORS.smoke);
         talk('fold', 0.4);
+        if (seat === 0 && this.canFastForward()) this.hud.message('Press F to skip to the end of the hand', COLORS.bone, 6);
         sound.play('fold');
         await this._muck(seat);
         break;
       case 'check':
         hud.setStatus(seat, 'Check', COLORS.bone);
         ch?.knock();
-        sound.play('knock');
         talk('check', 0.2);
-        await this.tweens.wait(0.25);
+        await this._knockGesture(seat);
         break;
       case 'call':
         hud.setStatus(seat, e.allIn ? 'All in' : `Call ${money(e.amount)}`, e.allIn ? COLORS.redLight : COLORS.paper);
@@ -485,16 +527,66 @@ export class HoldemController {
       if (seat === 0) this.clearChipSelection();
       chips = stack.take(amount);
     }
+    // an opponent reaches for his stack first, then pushes the chips out
+    const ch = this._arm(seat);
+    if (ch) await ch.gesture(this.tweens, [{ to: this._felt(stack.origin, 0.07), dur: 0.34, ease: ease.anticipate }]);
     const landing = this.pot.receive(chips);
     stack.layout();
+    if (ch) {
+      ch.gesture(this.tweens, [
+        { to: this._felt(seatSpots(seat).bet, 0.04), dur: 0.26, ease: ease.outBack, hold: 0.14 },
+        { to: null, dur: 0.5, ease: ease.inOutCubic },
+      ]);
+    }
     await landing;
   }
 
   async _slideFromPot(seat, amount) {
+    const ch = this._arm(seat);
+    // the winner leans in and rakes the pot back toward himself
+    if (ch) await ch.gesture(this.tweens, [{ to: this._felt(this.potSpot, 0.05), dur: 0.38, ease: ease.anticipate, hold: 0.08 }]);
     const chips = this.pot.take(amount);
     this.stacks[seat].add(chips);
-    await this.stacks[seat].layout();
+    const slide = this.stacks[seat].layout();
+    if (ch) ch.gesture(this.tweens, [{ to: this._felt(this.stacks[seat].origin, 0.05), dur: 0.5, ease: ease.inOutCubic }, { to: null, dur: 0.45, ease: ease.inOutCubic }]);
+    await slide;
     sound.play('chipStack');
+  }
+
+  /** An opponent reaches out and lays his hand on his cards (before turning them over). */
+  async _touchCards(seat) {
+    const ch = this._arm(seat);
+    const card = this.hole[seat]?.find(Boolean);
+    if (!ch || !card) return;
+    await ch.gesture(this.tweens, [{ to: this._felt(card.position, 0.03), dur: 0.32, ease: ease.anticipate, hold: 0.06 }]);
+    ch.gesture(this.tweens, [
+      { to: this._felt(card.position, 0.12), dur: 0.18, ease: ease.outQuint },
+      { to: null, dur: 0.45, ease: ease.inOutCubic },
+    ]);
+  }
+
+  /** An opponent with a working arm, or null (you, or someone who's gone). */
+  _arm(seat) {
+    const ch = seat ? this.room.characters[seat] : null;
+    return ch && !ch.gone && ch.armRest ? ch : null;
+  }
+
+  /** A point just above the felt. */
+  _felt(p, lift = 0.03) { return V(p.x, TABLE_HEIGHT + lift, p.z); }
+
+  /** Check: two quick knocks on the felt in front of him. */
+  async _knockGesture(seat) {
+    const ch = this._arm(seat);
+    if (!ch) { sound.play('knock'); await this.tweens.wait(0.25); return; }
+    const p = seatSpots(seat).cards;
+    await ch.gesture(this.tweens, [{ to: this._felt(p, 0.09), dur: 0.22, ease: ease.outQuint }]);
+    for (let i = 0; i < 2; i++) {
+      await ch.gesture(this.tweens, [{ to: this._felt(p, 0.012), dur: 0.07, ease: ease.inCubic }]);
+      sound.play('knock');
+      this.look.shake = Math.max(this.look.shake, 0.004);
+      await ch.gesture(this.tweens, [{ to: this._felt(p, 0.06), dur: 0.09, ease: ease.outQuad }]);
+    }
+    await ch.gesture(this.tweens, [{ to: null, dur: 0.4, ease: ease.inOutCubic }]);
   }
 
   // ---------------- cards ----------------
@@ -545,7 +637,7 @@ export class HoldemController {
 
   _blendTo(target, duration) {
     const from = this.look.blend;
-    return this.tweens.add({ duration, easing: ease.inOutQuad, update: (t) => { this.look.blend = from + (target - from) * t; } });
+    return this.tweens.add({ duration, easing: ease.inOutCubic, update: (t) => { this.look.blend = from + (target - from) * t; } });
   }
 
   /** E: lean in and tip up the near corners of your two cards (or put them back down). */
@@ -569,7 +661,7 @@ export class HoldemController {
     await Promise.all([
       this._blendTo(1, 0.4),
       this.tweens.add({ duration: 0.5, update: (t) => { this.peekLight.intensity = 0.5 * t; } }),
-      hand && this.tweens.add({ duration: 0.38, easing: ease.outCubic, update: (t) => hand.position.lerpVectors(handFrom, handTo, t) }),
+      hand && this.tweens.add({ duration: 0.38, easing: ease.outBack, update: (t) => hand.position.lerpVectors(handFrom, handTo, t) }),
     ]);
     sound.play('cardFlip');
     await this.tweens.add({
@@ -614,6 +706,7 @@ export class HoldemController {
     if (this.peeking) await this._unpeek();
     this.hud.message('Showdown', COLORS.gold, 2.5);
     const flips = [];
+    await Promise.all(e.hands.map((h) => this._touchCards(h.seat)));
     for (const h of e.hands) {
       this.revealed?.add(h.seat);
       this.hud.setStatus(h.seat, h.name, COLORS.lampGlow);
@@ -635,6 +728,7 @@ export class HoldemController {
    */
   async _showWinners(seats, zoom) {
     if (this.peeking) await this._unpeek();
+    await Promise.all(seats.filter((s) => !this.revealed?.has(s)).map((s) => this._touchCards(s)));
     const flips = [];
     for (const seat of seats) {
       if (this.revealed?.has(seat)) continue;
@@ -694,6 +788,15 @@ export class HoldemController {
     if (seat === 0 && this.peeking) await this._unpeek();
     const cards = this.hole[seat].filter(Boolean);
     this.hole[seat] = [];
+    // he puts a hand on his cards and flicks them away toward the deck
+    const ch = this._arm(seat);
+    if (ch && cards.length) {
+      await ch.gesture(this.tweens, [{ to: this._felt(cards[0].position, 0.03), dur: 0.3, ease: ease.anticipate }]);
+      ch.gesture(this.tweens, [
+        { to: this._felt(cards[0].position.clone().lerp(V(DECK_SPOT.x, 0, DECK_SPOT.z), 0.35), 0.06), dur: 0.2, ease: ease.outQuint },
+        { to: null, dur: 0.45, ease: ease.inOutCubic },
+      ]);
+    }
     await Promise.all(cards.map((c, i) => {
       c.rotation.x = 0;
       if (c.userData.topShown) { c.getObjectByName('flip').rotation[c.userData.flipAxis] = Math.PI; c.userData.topShown = false; }
@@ -719,18 +822,19 @@ export class HoldemController {
     const to = V(s.x, TABLE_HEIGHT + 0.001, s.z);
     if (instant) { btn.position.copy(to); return; }
     const from = btn.position.clone();
-    await this.tweens.add({ duration: 0.4, easing: ease.inOutQuad, update: (t) => btn.position.lerpVectors(from, to, t) });
+    await this.tweens.add({ duration: 0.4, easing: ease.outBack, update: (t) => btn.position.lerpVectors(from, to, t) });
   }
 
   // ---------------- game over ----------------
 
   _hideFirstPerson() {
     if (!this.fp) return;
-    for (const o of [this.fp.gun, this.fp.grip, this.fp.peek]) {
+    for (const o of [this.fp.gun, this.fp.grip, this.fp.peek, this.fp.open].filter(Boolean)) {
       o.visible = false;
       if (o.parent !== this.fp.scene) this.fp.scene.add(o);
       o.position.set(0, -5, 0);
       o.quaternion.identity();
+      o.scale.setScalar(1);
     }
     this.fp.tremble = 0;
   }
@@ -749,6 +853,7 @@ export class HoldemController {
   async _bustScene(seat) {
     const ch = this.room.characters[seat];
     if (!ch || ch.gone) return;
+    ch.gestureId++;
     if (this.peeking) await this._unpeek();
     if (this.topView) await this._exitTopView();
     const u = this.pr.post.uniforms;
@@ -800,7 +905,7 @@ export class HoldemController {
       ch.setArm(0);
       ch.lookAt(null);
       sound.play('gunGrab');
-      await this.tweens.add({ duration: 1.2, easing: ease.inOutQuad, update: (t) => ch.setArm(t, solved) });
+      await this.tweens.add({ duration: 1.2, easing: ease.anticipate, update: (t) => ch.setArm(t, solved) });
     }
     // a beat of nothing
     for (let s = 1; s < 4; s++) if (s !== seat) this.room.characters[s]?.lookAt(head);
@@ -814,7 +919,7 @@ export class HoldemController {
     u.tintAmount.value = 0.45;
     this.look.shake = 0.1;
     this.tweens.add({ duration: 0.12, update: (t) => { u.tintAmount.value = 0.45 * (1 - t); light.intensity = 6 * (1 - t) + 0.3; } });
-    await this.tweens.add({ duration: 0.35, easing: ease.outCubic, update: (t) => { ch.slump = t; } });
+    await this.tweens.add({ duration: 0.35, easing: ease.settle, update: (t) => { ch.slump = t; } });
     u.fade.value = 1;
     u.tintAmount.value = 0;
     light.intensity = 0;
@@ -899,14 +1004,19 @@ export class HoldemController {
     sound.play('gunDrop');
     this.look.shake = 0.025;
     const slideTo = land.clone().add(V(-0.03, 0, 0.06));
-    await this.tweens.add({ duration: 0.3, easing: ease.outCubic, update: (t) => gun.position.lerpVectors(land, slideTo, t) });
+    await this.tweens.add({ duration: 0.3, easing: ease.settle, update: (t) => gun.position.lerpVectors(land, slideTo, t) });
     await this.tweens.wait(0.9);
   }
 
-  /** Reach in and pick it up: the arm comes from you, the gun rights itself into the palm. */
+  /**
+   * Reach in and pick it up. Your open hand comes out of the corner of the screen, slows as it
+   * arrives over the grip, the fingers close (the open hand swaps for the gripping one) and the
+   * gun snaps into the palm. It's heavy: it comes up off the felt slowly and settles with a bob.
+   */
   async _gunPickUp() {
     const gun = this.fp.gun;
-    const hand = this.fp.grip;
+    const grip = this.fp.grip;
+    const open = this.fp.open ?? grip;
     const handPose = new THREE.Object3D();
     handPose.lookAt(V(-0.45, -0.05, -1));
     // lifted far enough that the gun, turned upright in the hand, stays above the felt
@@ -914,25 +1024,44 @@ export class HoldemController {
     grabAt.y = Math.max(grabAt.y, this._gunRestHeight(handPose.quaternion) + 0.01);
     handPose.position.copy(grabAt);
     const hFrom = V(0.34, 0.45, 1.0);
-    hand.visible = true;
-    hand.position.copy(hFrom);
-    hand.quaternion.copy(handPose.quaternion);
-    await this.tweens.add({ duration: 0.65, easing: ease.inOutQuad, update: (t) => hand.position.lerpVectors(hFrom, grabAt, t) });
+    const hover = grabAt.clone().add(V(0.05, 0.07, 0.09));
+    this.look.override = { yaw: -0.03, pitch: -0.7 }; // lean in over it
+    // a little warm fill so your hand reads in the dark, as it comes in
+    this.peekLight.position.copy(grabAt).add(V(0.1, 0.25, 0.25));
+    this.tweens.add({ duration: 0.4, update: (t) => { this.peekLight.intensity = 0.45 * t; } });
+    open.visible = true;
+    open.position.copy(hFrom);
+    open.quaternion.copy(handPose.quaternion);
+    await this.tweens.add({
+      duration: 0.42, easing: ease.outCubic,
+      update: (t) => { open.position.lerpVectors(hFrom, hover, t); open.position.y += Math.sin(Math.PI * t) * 0.03; },
+    });
+    await this.tweens.add({ duration: 0.13, easing: ease.inCubic, update: (t) => open.position.lerpVectors(hover, grabAt, t) });
+    // the fingers close round the grip
+    if (open !== grip) open.visible = false;
+    grip.visible = true;
+    grip.position.copy(grabAt);
+    grip.quaternion.copy(handPose.quaternion);
+    sound.play('gunGrab');
+    this.look.shake = Math.max(this.look.shake, 0.012);
     const g0 = gun.position.clone();
     const gq0 = gun.quaternion.clone();
-    sound.play('gunGrab');
     await this.tweens.add({
-      duration: 0.25, easing: ease.outCubic,
+      duration: 0.09, easing: ease.outQuint,
       update: (t) => { gun.position.lerpVectors(g0, grabAt, t); gun.quaternion.copy(gq0).slerp(handPose.quaternion, t); },
     });
-    hand.attach(gun);
+    grip.attach(gun);
     gun.position.set(0, 0, 0);
     gun.quaternion.identity();
-    this._gunGrab = { pos: grabAt.clone(), quat: handPose.quaternion.clone() };
-    await this.tweens.wait(0.35);
+    this.tweens.add({ duration: 0.18, easing: ease.linear, update: (t) => grip.scale.setScalar(1 + 0.05 * Math.sin(Math.PI * t)) });
+    // heavy: a slow start off the felt, then a little bob as the weight settles in the hand
+    const lift = grabAt.clone().add(V(-0.02, 0.09, 0.07));
+    await this.tweens.add({ duration: 0.55, easing: ease.settle, update: (t) => grip.position.lerpVectors(grabAt, lift, t) });
+    this._gunGrab = { pos: lift.clone(), table: grabAt.clone(), quat: handPose.quaternion.clone() };
+    await this.tweens.wait(0.2);
   }
 
-  /** Raise it to your temple. */
+  /** Raise it to your temple: it dips first with the weight, then comes up and settles. */
   async _gunToHead() {
     const hand = this.fp.grip;
     const right = V(1, 0, 0), fwd = V(0, 0, -1), up = V(0, 1, 0);
@@ -946,15 +1075,18 @@ export class HoldemController {
     aim.lookAt(this.playerEye.clone().addScaledVector(up, 0.015).addScaledVector(fwd, 0.05));
     const light = this.peekLight;
     light.position.copy(p1).addScaledVector(fwd, -0.12).addScaledVector(right, -0.08);
+    const clamp01 = (t) => Math.min(1, Math.max(0, t));
     await this.tweens.add({
-      duration: 1.15, easing: ease.inOutQuad,
+      duration: 1.2, easing: ease.anticipate,
       update: (t) => {
         hand.position.lerpVectors(p0, p1, t);
-        hand.position.y += Math.sin(Math.PI * t) * 0.06;
-        hand.quaternion.copy(q0).slerp(aim.quaternion, t);
-        light.intensity = 0.18 * t;
+        hand.position.y += Math.sin(Math.PI * clamp01(t)) * 0.06;
+        hand.quaternion.copy(q0).slerp(aim.quaternion, clamp01(t));
+        light.intensity = 0.18 * clamp01(t);
       },
     });
+    hand.position.copy(p1);
+    this.look.shake = Math.max(this.look.shake, 0.01); // the muzzle meets your head
     this.fp.tremble = 1;
   }
 
@@ -988,24 +1120,36 @@ export class HoldemController {
     this.look.override = null;
   }
 
-  /** You lived: lower the gun, set it on the felt and slide it back. */
+  /** You lived: lower the gun, set it on the felt, let go and slide it back. */
   async _gunPutDown() {
-    const hand = this.fp.grip;
+    const grip = this.fp.grip;
+    const open = this.fp.open ?? grip;
     const gun = this.fp.gun;
     this.fp.tremble = 0;
-    this.look.override = { yaw: -0.02, pitch: -0.55 };
-    const p0 = hand.position.clone();
-    const q0 = hand.quaternion.clone();
+    this.look.override = { yaw: -0.02, pitch: -0.62 };
+    const p0 = grip.position.clone();
+    const q0 = grip.quaternion.clone();
     const g = this._gunGrab;
     await this.tweens.add({
-      duration: 0.9, easing: ease.inOutQuad,
-      update: (t) => { hand.position.lerpVectors(p0, g.pos, t); hand.quaternion.copy(q0).slerp(g.quat, t); this.peekLight.intensity = 0.18 * (1 - t); },
+      duration: 0.85, easing: ease.inOutCubic,
+      update: (t) => { grip.position.lerpVectors(p0, g.pos, t); grip.quaternion.copy(q0).slerp(g.quat, t); this.peekLight.intensity = 0.18 * (1 - t); },
     });
+    // down onto the felt with a thud
+    await this.tweens.add({ duration: 0.16, easing: ease.inCubic, update: (t) => grip.position.lerpVectors(g.pos, g.table, t) });
     sound.play('gunDrop');
+    this.look.shake = Math.max(this.look.shake, 0.02);
     this.fp.scene.attach(gun);
-    const hFrom = hand.position.clone();
-    await this.tweens.add({ duration: 0.45, easing: ease.inOutQuad, update: (t) => hand.position.lerpVectors(hFrom, V(0.34, 0.45, 1.0), t) });
-    hand.visible = false;
+    // the fingers open and the hand pulls away
+    if (open !== grip) {
+      open.position.copy(grip.position);
+      open.quaternion.copy(grip.quaternion);
+      open.visible = true;
+      grip.visible = false;
+    }
+    const hFrom = open.position.clone();
+    await this.tweens.add({ duration: 0.4, easing: ease.inCubic, update: (t) => open.position.lerpVectors(hFrom, V(0.34, 0.45, 1.0), t) });
+    open.visible = false;
+    grip.visible = false;
     const gp = gun.position.clone();
     const gq = gun.quaternion.clone();
     // lay it back on its side, resting on the felt, then slide it back across

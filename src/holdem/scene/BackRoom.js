@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ease } from '../../shared/anim/Tweens.js';
 import { buildGrayBox, buildGrayLampVisuals } from './GrayBox.js';
 import { Lamp } from './Lamp.js';
 import { SEAT_ANGLES, SEAT_RADIUS, polar, seatSpots, DECK_SPOT, TABLE_HEIGHT } from './layout.js';
@@ -29,7 +30,10 @@ export class Character {
     this.lookTarget = null;
     this.yaw = 0;
     this.pitch = 0;
+    this.yawVel = 0;
+    this.pitchVel = 0;
     this.nod = 0;
+    this.gestureId = 0;
     this.gone = false;
     // idle habits
     this.idle = null; // { kind, t, dur, ... }
@@ -104,6 +108,7 @@ export class Character {
   }
 
   resetPose() {
+    this.gestureId++;
     this.setArm(0);
     this.slump = 0;
     this.idle = null;
@@ -185,15 +190,59 @@ export class Character {
       ty = THREE.MathUtils.clamp(Math.atan2(dx, dz), -0.9, 0.9);
       tp = THREE.MathUtils.clamp(-Math.atan2(dy, Math.hypot(dx, dz)), -0.4, 0.5);
     }
-    const k = 1 - Math.exp(-4 * dt);
-    this.yaw += (ty - this.yaw) * k;
-    this.pitch += (tp - this.pitch) * k;
+    // the head turns on a spring: a quick move that overshoots a hair and settles
+    const sdt = Math.min(dt, 1 / 30);
+    this.yawVel += ((ty - this.yaw) * 70 - this.yawVel * 10) * sdt;
+    this.pitchVel += ((tp - this.pitch) * 70 - this.pitchVel * 10) * sdt;
+    this.yaw += this.yawVel * sdt;
+    this.pitch += this.pitchVel * sdt;
     this.nod *= Math.exp(-6 * dt);
     this.head.rotation.set(
       this.headRest.x + this.pitch + this.idlePitch + Math.sin(this.nod * 20) * this.nod * 0.3 + this.slump * 0.6,
       this.headRest.y + this.yaw + this.idleYaw,
       this.headRest.z - this.slump * 0.5,
     );
+  }
+
+  /** The current arm pose [upper, fore], or rest. */
+  armPose() {
+    return [this.upperArm.quaternion.clone(), this.foreArm.quaternion.clone()];
+  }
+
+  /** A pole that bends the elbow down and out to the character's right. */
+  defaultPole() {
+    this.root.updateMatrixWorld(true);
+    const sh = this.upperArm.getWorldPosition(new THREE.Vector3());
+    const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.root.getWorldQuaternion(new THREE.Quaternion()));
+    return sh.addScaledVector(right, 0.45).add(new THREE.Vector3(0, -0.35, 0));
+  }
+
+  /**
+   * Move the right hand through a list of keys: { to: world point (or null for rest), dur,
+   * ease, hold }. Each key eases from wherever the arm is to the new pose. Starting another
+   * gesture cancels this one. Resolves when done.
+   */
+  async gesture(tweens, keys) {
+    if (!this.armRest || this.gone) return;
+    const id = ++this.gestureId;
+    let from = this.armPose();
+    for (const k of keys) {
+      if (id !== this.gestureId || this.gone) return;
+      const to = k.to ? this.solveArm(k.to, k.pole ?? this.defaultPole()) : this.armRest;
+      this.upperArm.quaternion.copy(from[0]);
+      this.foreArm.quaternion.copy(from[1]);
+      const a = from;
+      await tweens.add({
+        duration: k.dur ?? 0.3, easing: k.ease ?? ease.outBack,
+        update: (t) => {
+          if (id !== this.gestureId) return;
+          this.upperArm.quaternion.copy(a[0]).slerp(to[0], t);
+          this.foreArm.quaternion.copy(a[1]).slerp(to[1], t);
+        },
+      });
+      from = to;
+      if (k.hold) await tweens.wait(k.hold);
+    }
   }
 
   /** Little nod (used for checks and calls). */

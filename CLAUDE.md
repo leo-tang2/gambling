@@ -71,7 +71,8 @@ menu -> night N at the table -> every 2-3 hands a random offer (drink / Russian 
 night's stake; whatever is not spent in the bar is added to that stake (`nextNight` in meta.js,
 also what the save holds). Going broke or dying at roulette ends the run and clears the save
 (`localStorage['bargambling.run.v1']`). Drinks give hidden luck (`makeLuckyDeckFn` in meta.js):
-never show the player that it exists.
+never show the player that it exists. Separately, one hand in ten (`LIVELY_CHANCE`) is dealt from
+the best of 12 shuffles by weakest starting hand at the table (`livelyDeck`), so more people play.
 
 ## Conventions
 
@@ -84,9 +85,15 @@ never show the player that it exists.
 - Chip visuals must always match engine stacks. The controller checks this after every hand
   (`_checkSync`); if you change money outside the engine (e.g. roulette), update both.
 - Controls: 1 fold, 2 check/call, 3 raise, 4 all in, 5 cash out, E peek at cards, V top view,
-  Q puff cigar. Buttons show their number badge bottom-left. In the bar: WASD walk, click for
+  Q puff cigar, F fast-forward a hand you folded (HoldemController.fastForward: fade to black,
+  tweens.timeScale x40, fade back in at the showdown/award). Buttons show their number badge bottom-left. In the bar: WASD walk, click for
   mouse look, E use (catalog / back-room door / horse table / gallery), R reload in the gallery.
   Keep README controls in sync. The horses' names are always drawn in orange (COLORS.amber).
+- **Animation feel:** Buckshot Roulette is the reference: things wind up before they move
+  (`ease.anticipate`), arrive with a small overshoot (`ease.outBack`, `ease.settle`), heavy things start
+  slow. Heads turn on a spring (Character.update). Opponents act with their right arm through
+  `Character.gesture(tweens, keys)`: reach for chips, push the bet, knock to check, flick cards to fold,
+  rake the pot, turn up cards. Your gun grab swaps the open hand (HandOpen) for the gripping one.
 - New sounds: call `sound.play('name')` at the moment; list the name in Sound.js.
 
 ## Testing in the browser

@@ -53,7 +53,7 @@ function firstPerson(model) {
     group.add(o);
     return o;
   };
-  return { scene: group, gun: take('Revolver'), grip: take('HandGrip'), peek: take('HandPeek'), tremble: 0 };
+  return { scene: group, gun: take('Revolver'), grip: take('HandGrip'), open: take('HandOpen'), peek: take('HandPeek'), tremble: 0 };
 }
 
 async function boot() {

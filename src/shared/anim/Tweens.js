@@ -1,10 +1,24 @@
 // Tiny promise-based tween runner. Game-time scale lets tests fast-forward animations.
+// The extra curves give moves weight, in the spirit of Buckshot Roulette: things wind up a
+// little before they go (anticipate), arrive with a small overshoot and settle (outBack,
+// settle), and heavy objects start slow (inCubic).
+const C1 = 1.70158;
+const C2 = C1 * 1.525;
 export const ease = {
   linear: (t) => t,
   outQuad: (t) => 1 - (1 - t) * (1 - t),
   inOutQuad: (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2),
   outCubic: (t) => 1 - (1 - t) ** 3,
   outBack: (t) => 1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2,
+  inCubic: (t) => t * t * t,
+  inOutCubic: (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2),
+  outQuint: (t) => 1 - (1 - t) ** 5,
+  /** Pulls back a touch first, then goes and overshoots a touch before settling. */
+  anticipate: (t) => (t < 0.5
+    ? ((2 * t) ** 2 * ((C2 + 1) * 2 * t - C2)) / 2
+    : ((2 * t - 2) ** 2 * ((C2 + 1) * (t * 2 - 2) + C2) + 2) / 2),
+  /** Fast arrival with one small bounce past the target. */
+  settle: (t) => 1 - Math.exp(-6 * t) * Math.cos(t * 9) * (1 - t),
 };
 
 export class Tweens {

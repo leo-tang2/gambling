@@ -85,7 +85,7 @@ export class SideEvents {
     const dir = V(to.x - from.x, 0, to.z - from.z);
     root.rotation.y = Math.atan2(dir.x, dir.z);
     await this.c.tweens.add({
-      duration, easing: ease.inOutQuad,
+      duration, easing: ease.inOutCubic,
       update: (t, raw) => {
         root.position.set(from.x + (to.x - from.x) * t, Math.abs(Math.sin(raw * duration * 7)) * 0.018, from.z + (to.z - from.z) * t);
       },
@@ -131,7 +131,7 @@ export class SideEvents {
       const g = b.glass;
       c.room.scene.attach(g);
       const p0 = g.position.clone();
-      await c.tweens.add({ duration: 0.5, easing: ease.inOutQuad, update: (t) => { g.position.lerpVectors(p0, GLASS_SPOT, t); g.position.y += Math.sin(Math.PI * t) * 0.06; } });
+      await c.tweens.add({ duration: 0.5, easing: ease.outBack, update: (t) => { g.position.lerpVectors(p0, GLASS_SPOT, t); g.position.y += Math.sin(Math.PI * t) * 0.06; } });
       sound.play('glassDown');
       this._lookAtPoint(GLASS_SPOT, 0.1);
       await c.tweens.wait(0.5);
@@ -139,12 +139,12 @@ export class SideEvents {
       const lips = c.playerEye.clone().add(V(0.03, -0.12, -0.2));
       const p1 = g.position.clone();
       this._lookAtPoint(c.playerEye.clone().add(V(0, -0.02, -1)), 0);
-      await c.tweens.add({ duration: 0.55, easing: ease.inOutQuad, update: (t) => { g.position.lerpVectors(p1, lips, t); g.rotation.x = -1.1 * t; } });
+      await c.tweens.add({ duration: 0.55, easing: ease.anticipate, update: (t) => { g.position.lerpVectors(p1, lips, t); g.rotation.x = -1.1 * t; } });
       sound.play('gulp');
       c.look.shake = 0.01;
       await c.tweens.wait(0.5);
       g.getObjectByName('Drink').visible = false;
-      await c.tweens.add({ duration: 0.45, easing: ease.inOutQuad, update: (t) => { g.position.lerpVectors(lips, GLASS_SPOT, t); g.rotation.x = -1.1 * (1 - t); } });
+      await c.tweens.add({ duration: 0.45, easing: ease.inOutCubic, update: (t) => { g.position.lerpVectors(lips, GLASS_SPOT, t); g.rotation.x = -1.1 * (1 - t); } });
       sound.play('glassDown');
       c.dayStats.drinks++;
       c.drunk = Math.min(1, c.drunk + 0.5);
@@ -276,7 +276,7 @@ export class SideEvents {
     rig.cigar.rotation.copy(rig.cigar.userData.rest.rot);
     this._lookAtPoint(ASHTRAY_SPOT, 0.12);
     sound.play('slide');
-    await c.tweens.add({ duration: 0.8, easing: ease.outCubic, update: (t) => rig.root.position.lerpVectors(from, ASHTRAY_SPOT, t) });
+    await c.tweens.add({ duration: 0.8, easing: ease.settle, update: (t) => rig.root.position.lerpVectors(from, ASHTRAY_SPOT, t) });
     c.hud.say(seat, pick(['Enjoy.', 'Smoke up, kid.', 'Go on. It won\'t bite.']), 2);
     c.hud.message('[Q] to take a puff', COLORS.amber, 3);
     c.dayStats.cigars++;
@@ -309,13 +309,13 @@ export class SideEvents {
     const mouthQ = aim.quaternion.clone();
     rig.root.remove(aim);
     await c.tweens.add({
-      duration: 0.5, easing: ease.inOutQuad,
+      duration: 0.5, easing: ease.outBack,
       update: (t) => { cigar.position.lerpVectors(restPos, mouthL, t); cigar.position.y += Math.sin(Math.PI * t) * 0.05; cigar.quaternion.copy(restQ).slerp(mouthQ, t); },
     });
     sound.play('puff');
     await c.tweens.add({ duration: 1.0, update: (t) => { rig.ember.glow = t; } });
     await c.tweens.add({
-      duration: 0.5, easing: ease.inOutQuad,
+      duration: 0.5, easing: ease.inOutCubic,
       update: (t) => { cigar.position.lerpVectors(mouthL, restPos, t); cigar.position.y += Math.sin(Math.PI * t) * 0.05; cigar.quaternion.copy(mouthQ).slerp(restQ, t); rig.ember.glow = 1 - t; },
     });
     // breathe it out across the felt
