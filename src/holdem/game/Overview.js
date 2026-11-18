@@ -118,7 +118,7 @@ export function drawOverview(ui, data, time, onContinue) {
   // ---- what happens to the money ----
   const fy = my + 58;
   if (reveal >= 1) {
-    const line = `${money(data.toBar)} goes to your bar   -   ${money(data.stake)} comes back with you tomorrow`;
+    const line = `${money(data.toBar)} goes to your bar   -   ${money(data.stake)} comes back with you tomorrow, plus whatever you do not spend`;
     const lines = wrapText(line, W - 40);
     lines.forEach((l, i) => ui.textCentered(l, W / 2, fy + i * LINE_H, COLORS.paper));
     const bwid = 110;

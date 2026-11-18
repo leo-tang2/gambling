@@ -15,7 +15,7 @@ const SMOKES = {
 };
 
 /** A seated opponent: body + head node with breathing, look-at, and idle habits in the dark. */
-class Character {
+export class Character {
   constructor(root, seat, { smoke, id }) {
     this.root = root;
     this.seat = seat;

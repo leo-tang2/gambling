@@ -2,8 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { createGame, startHand } from '../src/holdem/engine/engine.js';
 import {
   mafiaMood, rouletteWinnings, ROULETTE_BONUS, rouletteFires, splitCashOut, humanHoleIndexes,
-  makeLuckyDeckFn, preflopScore, nextEventGap, BAR_ITEMS,
+  makeLuckyDeckFn, preflopScore, nextEventGap, BAR_ITEMS, nextNight, newRun,
 } from '../src/holdem/game/meta.js';
+
+describe('next night', () => {
+  it('brings whatever was not spent in the bar back to the table', () => {
+    const run = { ...newRun(), day: 2, stake: 600, barFund: 450, items: ['stools'] };
+    const next = nextNight(run);
+    expect(next.day).toBe(3);
+    expect(next.stake).toBe(1050);
+    expect(next.barFund).toBe(0);
+    expect(next.items).toEqual(['stools']);
+    expect(run.barFund).toBe(450); // the old run is untouched
+  });
+});
 
 const players = () => [
   { id: 'you', isHuman: true }, { id: 'a' }, { id: 'b' }, { id: 'c' },

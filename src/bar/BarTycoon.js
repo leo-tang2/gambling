@@ -1,321 +1,450 @@
+import * as THREE from 'three';
 import { COLORS } from '../shared/render/palette.js';
+import { wrapText } from '../shared/ui/font.js';
 import { BAR_ITEMS } from '../holdem/game/meta.js';
+import { BarScene, ROOM, EYE, START, BOOK, BACK_DOOR } from './BarScene.js';
 
 const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const RADIUS = 0.22; // you, for bumping into things
+const WALK = 2.3; // m/s
+const BOOK_W = 196; // width of the open catalog on screen
+
+/** One line about each thing, shown while you look at it in the catalog. */
+const BLURBS = {
+  stools: 'Red leather, chrome. Somewhere for the regulars to sit.',
+  plant: 'A palm in the corner. Makes the place look legitimate.',
+  dartboard: 'For the quiet nights. Mind the bartender.',
+  lights: 'Three green lamps over the counter.',
+  shelf: 'A full back bar. Bottles catch the light.',
+  fan: 'Pushes the cigar smoke around.',
+  neon: 'BAR, in red. Flickers when it rains.',
+  portrait: 'Don Sal, in oils. The family will hear about it.',
+  jukebox: 'Every record the regulars ask for.',
+  piano: 'Nobody here can play it. Yet.',
+  pool: 'Green felt, a full rack, a cue.',
+  aquarium: 'Five goldfish who have seen too much.',
+  chandelier: 'Gold and candlelight. The whole room glows.',
+};
+
+const GREETINGS = ['Evening, boss.', 'Back from the table? The catalog is on the back bar.', 'Quiet night. Have a look in the book.'];
+const CHATTER = [
+  ['Nice place you got.', 'They say you play cards with Don Sal.', 'Another round when you get a minute.'],
+  ['Hey, it is the owner.', 'You win tonight, or what?', 'This is the only bar in town I like.'],
+  ['Evening.', 'Good drink.', 'You hear what happened at the docks?'],
+  ['Bullseye. Almost.', 'You want a game?', 'These darts are crooked.'],
+  ['Eight ball, corner pocket.', 'Felt plays fast.', 'Rack them up again?'],
+];
 
 /**
- * Your own bar, between nights at the back room. Half of every cash-out lands in the bar fund;
- * you spend it on things for the bar. Nothing here earns money: it's just yours.
- * Drawn as a side-on pixel picture that fills in as you buy things, plus a catalog.
+ * Your own bar between nights, in 3D: walk around (WASD + mouse), talk past the regulars,
+ * open the catalog on the back bar to see the room from above and buy things, and go through
+ * the back-room door to the next night. Nothing in the bar earns money: it's just yours.
+ * Whatever is left in the bar fund comes back to the table with you.
  */
 export class BarTycoon {
-  constructor({ ui, onBuy, onNextDay }) {
+  constructor({ ui, pr, models, onBuy, onNextDay }) {
     this.ui = ui;
+    this.pr = pr;
     this.onBuy = onBuy;
     this.onNextDay = onNextDay;
-    this.flash = null; // { text, t, color }
+    this.world = new BarScene(models);
+    this.camera = new THREE.PerspectiveCamera(62, pr.width / pr.height, 0.05, 40);
+    this.camera.rotation.order = 'YXZ';
+    this.camera.name = 'BarCamera';
+    this.active = false;
+    this.mode = 'walk'; // walk | catalog | closing | door
+    this.player = { x: START.x, z: START.z, yaw: START.yaw, pitch: -0.05, bob: 0 };
+    this.keys = new Set();
+    this.flash = null;
     this.hover = null;
+    this.hoverLeft = 0;
+    this.speech = null; // { who, text, t }
+    this.spoken = new Set();
+    this.cam = { pos: V(0, EYE, 2), target: V(0, EYE, 0) };
+    this.offset = 0; // 0..1: how far the 3D view is pushed right to make room for the book
+    this.time = 0;
+
+    window.addEventListener('keydown', (e) => this._keyDown(e));
+    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('blur', () => this.keys.clear());
+    const canvas = pr.canvas;
+    canvas.addEventListener('pointerdown', () => {
+      if (this.active && this.mode === 'walk' && document.pointerLockElement !== canvas) {
+        try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not allowed here */ }
+      }
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!this.active || this.mode !== 'walk' || document.pointerLockElement !== canvas) return;
+      this.player.yaw -= e.movementX * 0.0024;
+      this.player.pitch = THREE.MathUtils.clamp(this.player.pitch - e.movementY * 0.0024, -1.2, 1.0);
+    });
   }
 
-  note(text, color = COLORS.lampGlow) { this.flash = { text, t: 2.2, color }; }
+  /** What main.js should render while you're in the bar. */
+  get view() { return { scene: this.world.scene, camera: this.camera }; }
+
+  enter(run) {
+    this.run = run;
+    this.active = true;
+    this.mode = 'walk';
+    this.world.setOwned(run.items);
+    Object.assign(this.player, { x: START.x, z: START.z, yaw: START.yaw, pitch: -0.05, bob: 0 });
+    this._eyePose(this.cam.pos, this.cam.target);
+    this.offset = 0;
+    this.hover = null;
+    this.flash = null;
+    this.spoken.clear();
+    this.speech = { who: 'bartender', text: GREETINGS[(run.day - 1) % GREETINGS.length], t: 4 };
+    this.spoken.add('bartender');
+  }
+
+  leave() {
+    this.active = false;
+    this.keys.clear();
+    this.world.setPreview(null);
+    if (document.pointerLockElement === this.pr.canvas) document.exitPointerLock?.();
+  }
+
+  bought(item, msg) {
+    this.world.setOwned(this.run.items);
+    this.world.setPreview(this.hover);
+    this.note(msg);
+  }
+
+  note(text, color = COLORS.lampGlow) { this.flash = { text, t: 2.6, color }; }
+
+  /** Tomorrow's stake: what you brought out plus whatever is left in the bar fund. */
+  tomorrowStake() { return this.run.stake + this.run.barFund; }
+
+  // ---------------- input ----------------
+
+  _keyDown(e) {
+    if (!this.active) return;
+    this.keys.add(e.code);
+    if (e.repeat) return;
+    if (this.mode === 'walk') {
+      if (e.code === 'KeyE' || e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); this._use(); }
+    } else if (this.mode === 'catalog') {
+      if (e.code === 'Escape' || e.code === 'KeyE' || e.code === 'Tab') { e.preventDefault(); this.closeCatalog(); }
+    } else if (this.mode === 'door') {
+      if (e.code === 'Enter' || e.code === 'KeyE') this._goThrough();
+      else if (e.code === 'Escape') this.mode = 'walk';
+    }
+  }
+
+  /** The thing in front of you that E would use, if any. */
+  _target() {
+    const p = this.player;
+    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    const near = (pt, r) => {
+      const dx = pt.x - p.x, dz = pt.z - p.z;
+      const d = Math.hypot(dx, dz);
+      return d < r && (d < 0.5 || (dx * fx + dz * fz) / d > 0.6);
+    };
+    if (near(BOOK, 1.35)) return { kind: 'book', label: 'Read the catalog' };
+    if (near(BACK_DOOR, 1.5)) return { kind: 'door', label: `Back room: night ${this.run.day + 1}` };
+    return null;
+  }
+
+  _use() {
+    const t = this._target();
+    if (t?.kind === 'book') this.openCatalog();
+    else if (t?.kind === 'door') this.mode = 'door';
+  }
+
+  openCatalog() {
+    if (this.mode !== 'walk') return;
+    this.mode = 'catalog';
+    this.keys.clear();
+    this.hover = null;
+    if (document.pointerLockElement === this.pr.canvas) document.exitPointerLock?.();
+  }
+
+  closeCatalog() {
+    if (this.mode !== 'catalog') return;
+    this.mode = 'closing';
+    this.hover = null;
+    this.world.setPreview(null);
+  }
+
+  _goThrough() {
+    this.mode = 'black';
+    this.onNextDay();
+  }
+
+  // ---------------- per frame ----------------
+
+  _eyePose(pos, target) {
+    const p = this.player;
+    pos.set(p.x, EYE + Math.sin(p.bob) * 0.025, p.z);
+    const cp = Math.cos(p.pitch);
+    target.set(p.x - Math.sin(p.yaw) * cp, pos.y + Math.sin(p.pitch), p.z - Math.cos(p.yaw) * cp);
+  }
+
+  _walk(dt) {
+    const p = this.player, k = this.keys;
+    // turn with the arrow keys, or by holding the pointer near the screen edge (no mouse capture)
+    if (k.has('ArrowLeft')) p.yaw += dt * 2.0;
+    if (k.has('ArrowRight')) p.yaw -= dt * 2.0;
+    if (document.pointerLockElement !== this.pr.canvas && this.ui.mouse.inside) {
+      const u = this.ui.mouse.x / this.ui.w, e = 0.1;
+      if (u < e) p.yaw += dt * 2.2 * (e - u) / e;
+      else if (u > 1 - e) p.yaw -= dt * 2.2 * (u - (1 - e)) / e;
+    }
+    let f = 0, s = 0;
+    if (k.has('KeyW') || k.has('ArrowUp')) f += 1;
+    if (k.has('KeyS') || k.has('ArrowDown')) f -= 1;
+    if (k.has('KeyD')) s += 1;
+    if (k.has('KeyA')) s -= 1;
+    const len = Math.hypot(f, s);
+    if (len > 0) {
+      const sp = (WALK * dt) / len * (k.has('ShiftLeft') ? 1.5 : 1);
+      const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+      this._move(p, (fx * f - fz * s) * sp, (fz * f + fx * s) * sp);
+      p.bob += dt * 9;
+      if (Math.floor(p.bob / Math.PI) !== Math.floor((p.bob - dt * 9) / Math.PI)) this._step();
+    } else p.bob += (Math.round(p.bob / Math.PI) * Math.PI - p.bob) * Math.min(1, dt * 8);
+  }
+
+  _step() { /* sound.play('footsteps') when there is sound */ }
+
+  /** Move with sliding collisions against the room's boxes and the bartender. */
+  _move(p, dx, dz) {
+    const boxes = this.world.solidBoxes();
+    const blocked = (x, z) => {
+      if (x < ROOM.x0 + RADIUS || x > ROOM.x1 - RADIUS || z < ROOM.z0 + RADIUS || z > ROOM.z1 - RADIUS) return true;
+      for (const [x0, z0, x1, z1] of boxes) {
+        const cx = Math.max(x0, Math.min(x, x1)), cz = Math.max(z0, Math.min(z, z1));
+        if ((x - cx) ** 2 + (z - cz) ** 2 < RADIUS * RADIUS) return true;
+      }
+      for (const d of this.world.dynamic) if ((x - d.pos.x) ** 2 + (z - d.pos.z) ** 2 < (RADIUS + d.r) ** 2) return true;
+      return false;
+    };
+    if (!blocked(p.x + dx, p.z)) p.x += dx;
+    if (!blocked(p.x, p.z + dz)) p.z += dz;
+  }
+
+  /** Where the catalog camera wants to be: over the whole room, or close on the hovered thing. */
+  _catalogGoal(pos, target) {
+    const it = this.hover && this.world.items[this.hover];
+    if (it) {
+      target.copy(it.focus);
+      pos.copy(it.view).normalize().multiplyScalar(it.dist).add(it.focus);
+    } else {
+      target.set(0, 0.2, 0.1);
+      pos.set(0.5, 6.6, 5.6);
+    }
+  }
+
+  _updateCamera(dt) {
+    const cam = this.camera;
+    const goalPos = V(0, 0, 0), goalTarget = V(0, 0, 0);
+    if (this.mode === 'walk' || this.mode === 'door' || this.mode === 'black') {
+      this._eyePose(goalPos, goalTarget);
+      this.cam.pos.copy(goalPos);
+      this.cam.target.copy(goalTarget);
+    } else {
+      if (this.mode === 'catalog') this._catalogGoal(goalPos, goalTarget);
+      else this._eyePose(goalPos, goalTarget);
+      // ease toward the goal: this is the zoom when you hover something in the book
+      const k = 1 - Math.exp(-(this.mode === 'closing' ? 4 : 3.2) * dt);
+      this.cam.pos.lerp(goalPos, k);
+      this.cam.target.lerp(goalTarget, k);
+      if (this.mode === 'closing' && this.cam.pos.distanceTo(goalPos) < 0.03 && this.cam.target.distanceTo(goalTarget) < 0.03) {
+        this.mode = 'walk';
+      }
+    }
+    const want = this.mode === 'catalog' ? 1 : 0;
+    this.offset += (want - this.offset) * (1 - Math.exp(-5 * dt));
+    this.world.hemi.intensity = 1.0 + this.offset * 0.9; // a little more light to shop by
+    cam.position.copy(this.cam.pos);
+    cam.lookAt(this.cam.target);
+    const w = this.pr.width, h = this.pr.height;
+    if (cam.aspect !== w / h) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
+    const shift = Math.round(this.offset * (BOOK_W + 8) / 2);
+    if (shift > 0) cam.setViewOffset(w, h, -shift, 0, w, h);
+    else if (cam.view?.enabled) cam.clearViewOffset();
+    // dollhouse: lift the ceiling and the street wall away when the camera is above or outside
+    this.world.ceiling.visible = cam.position.y < ROOM.h - 0.05;
+    this.world.walls.front.visible = cam.position.z < ROOM.z1 - 0.05;
+  }
+
+  _chatter() {
+    if (this.speech && this.speech.t > 0) return;
+    const eye = this.camera.position;
+    for (const h of this.world.heads()) {
+      if (this.spoken.has(h.who)) continue;
+      if (h.pos.distanceTo(eye) > 1.9) continue;
+      const lines = h.who === 'bartender' ? GREETINGS : CHATTER[h.who % CHATTER.length];
+      this.speech = { who: h.who, text: lines[Math.floor(Math.random() * lines.length)], t: 3.2 };
+      this.spoken.add(h.who);
+      return;
+    }
+  }
+
+  // ---------------- drawing ----------------
 
   draw(run, dt, time) {
-    const ui = this.ui;
-    const W = ui.w, H = ui.h;
+    this.run = run;
+    this.time = time;
+    if (!this.active) this.enter(run);
     if (this.flash && (this.flash.t -= dt) <= 0) this.flash = null;
-    ui.rect(0, 0, W, H, COLORS.black);
+    if (this.speech) this.speech.t -= dt;
+    if (this.mode === 'walk') this._walk(dt);
+    this._updateCamera(dt);
+    this.world.update(dt, this.mode === 'walk' ? this.camera.position : null);
+    if (this.mode === 'walk') this._chatter();
 
-    // header
-    ui.text('Your Bar', 10, 8, COLORS.lampGlow, { scale: 2, shadow: COLORS.bloodDark });
-    ui.text(`After night ${run.day}`, 12 + ui.textWidth('Your Bar', 2) + 8, 13, COLORS.bone);
-    const fund = `Bar fund ${money(run.barFund)}`;
-    const stake = `Tomorrow's stake ${money(run.stake)}`;
-    ui.text(fund, W - 10 - ui.textWidth(fund), 6, COLORS.gold);
-    ui.text(stake, W - 10 - ui.textWidth(stake), 16, COLORS.bone);
+    const ui = this.ui;
+    ui.showCursor = this.mode !== 'walk' || document.pointerLockElement !== this.pr.canvas;
+    if (this.mode === 'catalog' || this.mode === 'closing') this._drawCatalog(dt);
+    else this._drawWalk();
+    if (this.mode === 'door') this._drawDoor();
+  }
 
-    const catW = 200;
-    const sx = 10, sy = 30, sw = W - catW - 28, sh = H - 30 - 44;
-    this._drawScene(run, sx, sy, sw, sh, time);
+  _drawHeader() {
+    const ui = this.ui, W = ui.w;
+    ui.text('Your Bar', 8, 7, COLORS.lampGlow, { shadow: COLORS.black });
+    ui.text(`after night ${this.run.day}`, 12 + ui.textWidth('Your Bar'), 7, COLORS.bone, { shadow: COLORS.black });
+    const fund = `Bar fund ${money(this.run.barFund)}`;
+    const stake = `Tomorrow ${money(this.tomorrowStake())}`;
+    ui.text(fund, W - 8 - ui.textWidth(fund), 7, COLORS.gold, { shadow: COLORS.black });
+    ui.text(stake, W - 8 - ui.textWidth(stake), 17, COLORS.bone, { shadow: COLORS.black });
+  }
 
-    // catalog
-    const cx = W - catW - 10;
-    ui.panel(cx, sy, catW, sh, { fill: COLORS.ink, border: COLORS.woodLight });
-    ui.text('Catalog', cx + 7, sy + 6, COLORS.paper);
-    ui.text('owned', cx + catW - 7 - ui.textWidth('owned'), sy + 6, COLORS.smoke);
-    this.hover = null;
-    const rowH = Math.min(16, Math.floor((sh - 22) / BAR_ITEMS.length));
+  _drawWalk() {
+    const ui = this.ui, W = ui.w, H = ui.h;
+    this._drawHeader();
+    // crosshair
+    const cx = Math.round(W / 2), cy = Math.round(H / 2);
+    ui.rect(cx - 1, cy, 3, 1, COLORS.paper);
+    ui.rect(cx, cy - 1, 1, 3, COLORS.paper);
+    // speech
+    if (this.speech && this.speech.t > 0) {
+      const h = this.world.heads().find((x) => x.who === this.speech.who);
+      const p = h && this._toScreen(h.pos.clone().add(V(0, 0.38, 0)));
+      if (p) {
+        const w = ui.textWidth(this.speech.text) + 8;
+        const x = THREE.MathUtils.clamp(p.x - w / 2, 4, W - w - 4);
+        const y = THREE.MathUtils.clamp(p.y - 12, 26, H - 40);
+        ui.rect(x, y, w, 11, COLORS.ink);
+        ui.rect(x, y + 11, w, 1, COLORS.amberDark);
+        ui.text(this.speech.text, x + 4, y + 3, COLORS.cream);
+      }
+    }
+    // what E would do
+    const t = this.mode === 'walk' ? this._target() : null;
+    if (t) {
+      const label = `E  ${t.label}`;
+      const w = ui.textWidth(label) + 12;
+      const x = Math.round(W / 2 - w / 2), y = cy + 16;
+      ui.rect(x, y, w, 13, COLORS.ink);
+      ui.rect(x, y + 12, w, 1, COLORS.gold);
+      ui.text('E', x + 6, y + 4, COLORS.gold);
+      ui.text(t.label, x + 6 + ui.textWidth('E  '), y + 4, COLORS.paper);
+      if (ui.clicked) { ui.consumeClick(); this._use(); }
+    }
+    if (this.flash) ui.textCentered(this.flash.text, W / 2, H - 30, this.flash.color, { shadow: COLORS.black });
+    const locked = document.pointerLockElement === this.pr.canvas;
+    const hint = locked ? 'WASD walk   mouse look   E use' : 'WASD walk   click to look with the mouse   E use';
+    ui.text(hint, 8, H - 12, COLORS.smoke, { shadow: COLORS.black });
+    const goal = 'The catalog is on the back bar. The back room door is on the left.';
+    if (!this.run.items.length) ui.text(goal, 8, H - 22, COLORS.smoke, { shadow: COLORS.black });
+  }
+
+  _drawDoor() {
+    const ui = this.ui, W = ui.w, H = ui.h;
+    const pw = 236, ph = 76, x = Math.round((W - pw) / 2), y = Math.round((H - ph) / 2);
+    ui.panel(x, y, pw, ph, { fill: COLORS.ink, border: COLORS.gold });
+    ui.textCentered(`Back to the table: night ${this.run.day + 1}?`, W / 2, y + 8, COLORS.gold);
+    const left = this.run.barFund;
+    const line = left > 0 ? `${money(left)} left in the bar fund comes with you.` : 'The bar fund is empty.';
+    ui.textCentered(line, W / 2, y + 22, COLORS.paper);
+    ui.textCentered(`You sit down with ${money(this.tomorrowStake())}.`, W / 2, y + 33, COLORS.bone);
+    if (ui.button('Go', x + 14, y + ph - 22, 96, 15, { accent: COLORS.gold, badge: 1 })) this._goThrough();
+    if (ui.button('Stay a while', x + pw - 110, y + ph - 22, 96, 15, { badge: 2 })) this.mode = 'walk';
+    if (this.keys.has('Digit1')) this._goThrough();
+    else if (this.keys.has('Digit2')) this.mode = 'walk';
+  }
+
+  _drawCatalog(dt) {
+    const ui = this.ui, W = ui.w, H = ui.h;
+    const slide = Math.round((1 - this.offset) * -(BOOK_W + 20));
+    const bx = 6 + slide, by = 6, bw = BOOK_W, bh = H - 12;
+    // the open book: red cover, paper page, a stitched spine on the right
+    ui.rect(bx, by, bw, bh, COLORS.red);
+    ui.rect(bx + 1, by + 1, bw - 2, bh - 2, COLORS.redMid);
+    ui.rect(bx + 4, by + 4, bw - 8, bh - 8, COLORS.paper);
+    ui.rect(bx + bw - 9, by + 4, 2, bh - 8, COLORS.bone);
+    for (let yy = by + 10; yy < by + bh - 10; yy += 8) ui.rect(bx + bw - 6, yy, 1, 3, COLORS.goldLight);
+    ui.hits.push({ x: bx, y: by, w: bw, h: bh });
+    const px = bx + 10, pw = bw - 26;
+    ui.text('Catalog', px, by + 10, COLORS.red, { scale: 2 });
+    ui.text('for your bar', px + ui.textWidth('Catalog', 2) + 6, by + 16, COLORS.smoke);
+    ui.rect(px, by + 27, pw, 1, COLORS.bone);
+
+    const top = by + 32;
+    const footer = 64;
+    const rowH = Math.max(11, Math.min(16, Math.floor((bh - (top - by) - footer) / BAR_ITEMS.length)));
+    let hover = null;
     BAR_ITEMS.forEach((it, i) => {
-      const y = sy + 18 + i * rowH;
-      const owned = run.items.includes(it.id);
-      const afford = run.barFund >= it.price;
-      if (ui.over(cx + 2, y, catW - 4, rowH)) this.hover = it.id;
-      ui.text(it.name, cx + 7, y + Math.floor((rowH - 6) / 2), owned ? COLORS.smoke : COLORS.paper);
+      const y = top + i * rowH;
+      const owned = this.run.items.includes(it.id);
+      const afford = this.run.barFund >= it.price;
+      const over = this.mode === 'catalog' && ui.over(px - 2, y, pw + 4, rowH);
+      if (over) hover = it.id;
+      if (over || this.hover === it.id) ui.ditherRect(px - 2, y, pw + 4, rowH, COLORS.amber, over ? 0.45 : 0.25);
+      const ty = y + Math.floor((rowH - 6) / 2);
+      ui.text(it.name, px, ty, owned ? COLORS.sage : COLORS.woodDark);
       if (owned) {
-        const t = 'Owned';
-        ui.text(t, cx + catW - 8 - ui.textWidth(t), y + Math.floor((rowH - 6) / 2), COLORS.sage);
+        ui.text('Yours', px + pw - ui.textWidth('Yours'), ty, COLORS.sage);
       } else {
         const label = money(it.price);
-        const bw = 46;
-        if (ui.button(label, cx + catW - 6 - bw, y + 1, bw, rowH - 2, { enabled: afford, accent: COLORS.amberDark })) {
+        const w = 44;
+        if (ui.button(label, px + pw - w, y + 1, w, rowH - 2, { enabled: afford && this.mode === 'catalog', accent: COLORS.amberDark })) {
           this.onBuy(it);
         }
       }
     });
+    // keep the last thing in view for a moment when the pointer slips off the list
+    if (hover) { this.hover = hover; this.hoverLeft = 0.35; }
+    else if (this.hover && (this.hoverLeft -= dt) <= 0) this.hover = null;
+    if (this.mode === 'catalog') this.world.setPreview(this.hover);
 
-    // footer
-    const fy = H - 38;
-    const tip = this.flash ? this.flash.text : 'Nothing in the bar earns money. It is just yours.';
-    ui.text(tip, 10, fy + 4, this.flash ? this.flash.color : COLORS.smoke);
-    ui.text('Half of every cash-out goes to the bar, half comes back to the table with you.', 10, fy + 15, COLORS.smoke);
-    const label = `Night ${run.day + 1}: back to the table`;
-    const bw = ui.textWidth(label) + 20;
-    if (ui.button(label, W - 10 - bw, fy + 8, bw, 17, { accent: COLORS.gold })) this.onNextDay();
-  }
+    const fy = top + BAR_ITEMS.length * rowH + 4;
+    ui.rect(px, fy, pw, 1, COLORS.bone);
+    ui.text('Bar fund', px, fy + 5, COLORS.woodDark);
+    ui.text(money(this.run.barFund), px + pw - ui.textWidth(money(this.run.barFund)), fy + 5, COLORS.amberDark);
+    ui.text('Left over comes to the table:', px, fy + 15, COLORS.smoke);
+    const ts = `tomorrow you sit down with ${money(this.tomorrowStake())}`;
+    ui.text(ts, px, fy + 25, COLORS.woodDark);
+    if (ui.button('Close the book', px, by + bh - 22, pw, 14, { accent: COLORS.red }) && this.mode === 'catalog') this.closeCatalog();
 
-  // ---------------- the picture ----------------
-
-  _drawScene(run, x, y, w, h, time) {
-    const ui = this.ui;
-    const has = (id) => run.items.includes(id);
-    const hov = this.hover && !has(this.hover) ? this.hover : null;
-    const X = (f) => Math.round(x + f * w);
-    const Y = (f) => Math.round(y + f * h);
-    const lit = has('lights') || has('chandelier');
-
-    ui.rect(x - 1, y - 1, w + 2, h + 2, COLORS.woodLight);
-    // wall: dark wood paneling, a little warmer when there's light to see it by
-    const wallH = Math.round(h * 0.64);
-    ui.rect(x, y, w, wallH, lit ? COLORS.wood : COLORS.woodDark);
-    for (let px = x + 6; px < x + w; px += 14) ui.rect(px, y, 1, wallH, lit ? COLORS.woodMid : COLORS.shadow);
-    ui.rect(x, y, w, 6, COLORS.shadow); // ceiling beam
-    ui.rect(x, y + wallH - 18, w, 2, COLORS.woodLight); // chair rail
-    ui.rect(x, y + wallH - 16, w, 16, lit ? COLORS.woodMid : COLORS.dusk);
-    // floor: checkered tiles
-    for (let fy = y + wallH, r = 0; fy < y + h; fy += 6, r++) {
-      for (let fx = x, c = 0; fx < x + w; fx += 12, c++) {
-        ui.rect(fx, fy, Math.min(12, x + w - fx), Math.min(6, y + h - fy), (r + c) % 2 ? COLORS.ink : (lit ? COLORS.ash : COLORS.shadow));
+    // label over the 3D view for whatever you're looking at
+    const vx = bx + bw + 10, vw = W - vx - 8;
+    if (this.mode === 'catalog' && vw > 60) {
+      const it = this.hover && BAR_ITEMS.find((b) => b.id === this.hover);
+      if (it) {
+        const owned = this.run.items.includes(it.id);
+        const tag = owned ? 'In your bar' : `Preview  ${money(it.price)}`;
+        ui.rect(vx, 8, vw, 24, COLORS.ink);
+        ui.rect(vx, 31, vw, 1, owned ? COLORS.sage : COLORS.gold);
+        ui.text(it.name, vx + 6, 12, COLORS.cream);
+        ui.text(tag, vx + vw - 6 - ui.textWidth(tag), 12, owned ? COLORS.sage : COLORS.gold);
+        const blurb = wrapText(BLURBS[it.id] ?? '', vw - 12)[0] ?? '';
+        ui.text(blurb, vx + 6, 22, COLORS.bone);
+      } else {
+        const msg = 'Point at something in the book to see it in your bar.';
+        ui.textCentered(msg, vx + vw / 2, 12, COLORS.bone, { shadow: COLORS.black });
       }
-    }
-    // a bare bulb is all you start with
-    if (!lit) {
-      ui.rect(X(0.5), y + 6, 1, 14, COLORS.ash);
-      ui.ditherRect(X(0.5) - 10, y + 16, 21, 12, COLORS.amberDark, 0.25);
-      ui.rect(X(0.5) - 1, y + 20, 3, 3, COLORS.lampGlow);
-    }
-
-    // the counter, on the right
-    const cL = X(0.52), cR = X(0.96), cTop = y + wallH - 4;
-    ui.rect(cL, cTop, cR - cL, 2, COLORS.amberDark);
-    ui.rect(cL, cTop + 2, cR - cL, 26, COLORS.woodDark);
-    for (let px = cL + 8; px < cR; px += 16) ui.rect(px, cTop + 5, 10, 19, COLORS.wood);
-    ui.rect(cL, cTop + 28, cR - cL, 1, COLORS.black);
-
-    const outline = (bx, by, bw, bh) => {
-      for (let i = 0; i < bw; i += 3) { ui.rect(bx + i, by, 1, 1, COLORS.gold); ui.rect(bx + i, by + bh - 1, 1, 1, COLORS.gold); }
-      for (let i = 0; i < bh; i += 3) { ui.rect(bx, by + i, 1, 1, COLORS.gold); ui.rect(bx + bw - 1, by + i, 1, 1, COLORS.gold); }
-    };
-
-    // liquor shelf behind the counter
-    {
-      const sx0 = X(0.56), sw = X(0.92) - sx0, sy0 = Y(0.16);
-      if (has('shelf')) {
-        const cols = [COLORS.amber, COLORS.sage, COLORS.redLight, COLORS.gold, COLORS.cream, COLORS.blue, COLORS.amberMid];
-        for (let r = 0; r < 2; r++) {
-          const by = sy0 + 16 + r * 20;
-          ui.rect(sx0, by, sw, 2, COLORS.woodLight);
-          for (let bx = sx0 + 3, k = r * 3; bx < sx0 + sw - 4; bx += 7, k++) {
-            const bh = 8 + ((k * 5) % 5);
-            ui.rect(bx, by - bh, 4, bh, cols[k % cols.length]);
-            ui.rect(bx + 1, by - bh - 3, 2, 3, cols[k % cols.length]);
-            ui.rect(bx + 1, by - bh + 2, 1, 3, COLORS.white);
-          }
-        }
-      } else if (hov === 'shelf') outline(sx0, sy0, sw, 40);
-    }
-
-    // neon sign
-    {
-      const nx = X(0.6), ny = Y(0.04) + 4, nw = 40, nh = 14;
-      if (has('neon')) {
-        const on = Math.sin(time * 9) > -0.85 || Math.floor(time * 3) % 7 !== 0;
-        ui.ditherRect(nx - 4, ny - 3, nw + 8, nh + 6, COLORS.redLight, on ? 0.3 : 0.08);
-        ui.rect(nx, ny, nw, nh, COLORS.ink);
-        ui.textCentered('BAR', nx + nw / 2, ny + 4, on ? COLORS.cream : COLORS.red);
-        ui.rect(nx, ny, nw, 1, on ? COLORS.redLight : COLORS.red);
-        ui.rect(nx, ny + nh - 1, nw, 1, on ? COLORS.redLight : COLORS.red);
-      } else if (hov === 'neon') outline(nx, ny, nw, nh);
-    }
-
-    // portrait of Don Sal
-    {
-      const px = X(0.38), py = Y(0.12), pw = 26, ph = 32;
-      if (has('portrait')) {
-        ui.rect(px, py, pw, ph, COLORS.gold);
-        ui.rect(px + 2, py + 2, pw - 4, ph - 4, COLORS.navy);
-        ui.rect(px + 9, py + 10, 8, 9, COLORS.skin);
-        ui.rect(px + 6, py + 7, 14, 2, COLORS.ink); // hat brim
-        ui.rect(px + 8, py + 3, 10, 4, COLORS.ink);
-        ui.rect(px + 7, py + 19, 12, ph - 21, COLORS.navyLight);
-        ui.rect(px + 12, py + 19, 2, 6, COLORS.red);
-        ui.rect(px + 17, py + 16, 4, 1, COLORS.wood); // the cigar
-        ui.rect(px + 21, py + 16, 1, 1, COLORS.amber);
-      } else if (hov === 'portrait') outline(px, py, pw, ph);
-    }
-
-    // dartboard
-    {
-      const dx = X(0.08) + 12, dy = Y(0.2) + 12;
-      if (has('dartboard')) {
-        this._disc(dx, dy, 12, COLORS.ink);
-        this._disc(dx, dy, 10, COLORS.cream);
-        this._disc(dx, dy, 8, COLORS.red);
-        this._disc(dx, dy, 6, COLORS.cream);
-        this._disc(dx, dy, 3, COLORS.sage);
-        this._disc(dx, dy, 1, COLORS.red);
-        ui.rect(dx + 4, dy - 3, 5, 1, COLORS.gold);
-      } else if (hov === 'dartboard') outline(dx - 12, dy - 12, 25, 25);
-    }
-
-    // fish tank
-    {
-      const ax = X(0.2), ay = Y(0.27), aw = 40, ah = 22;
-      if (has('aquarium')) {
-        ui.rect(ax - 1, ay - 1, aw + 2, ah + 2, COLORS.ash);
-        ui.rect(ax, ay, aw, ah, COLORS.navy);
-        ui.ditherRect(ax, ay, aw, 4, COLORS.blue, 0.6);
-        ui.rect(ax, ay + ah - 3, aw, 3, COLORS.amberDark);
-        for (let i = 0; i < 3; i++) {
-          const fx = ax + 4 + ((time * (8 + i * 3) + i * 13) % (aw - 10));
-          const fy = ay + 7 + i * 4 + Math.round(Math.sin(time * 2 + i) * 1.5);
-          ui.rect(fx, fy, 4, 2, i === 1 ? COLORS.gold : COLORS.amber);
-          ui.rect(fx - 1, fy, 1, 2, i === 1 ? COLORS.amber : COLORS.redLight);
-        }
-        ui.rect(ax + aw - 6, ay + ah - 10, 1, 7, COLORS.sage);
-        ui.rect(ax + aw - 9, ay + ah - 8, 1, 5, COLORS.sage);
-        ui.rect(ax - 2, ay + ah + 1, aw + 4, 12, COLORS.woodDark); // stand
-      } else if (hov === 'aquarium') outline(ax, ay, aw, ah + 13);
-    }
-
-    // piano against the left wall
-    {
-      const px = X(0.03), pw = 44, ph = 34, py = y + wallH + 6 - ph;
-      if (has('piano')) {
-        ui.rect(px, py, pw, ph, COLORS.ink);
-        ui.rect(px + 2, py + 2, pw - 4, 10, COLORS.woodDark);
-        ui.rect(px, py + 14, pw, 4, COLORS.cream);
-        for (let k = 2; k < pw; k += 4) ui.rect(px + k, py + 14, 1, 4, COLORS.ash);
-        for (let k = 3; k < pw - 2; k += 8) { ui.rect(px + k, py + 14, 2, 2, COLORS.black); ui.rect(px + k + 4, py + 14, 2, 2, COLORS.black); }
-        ui.rect(px + 3, py + 18, 3, ph - 18, COLORS.ink);
-        ui.rect(px + pw - 6, py + 18, 3, ph - 18, COLORS.ink);
-      } else if (hov === 'piano') outline(px, py, pw, ph);
-    }
-
-    // jukebox
-    {
-      const jx = X(0.3), jw = 22, jh = 34, jy = y + wallH + 8 - jh;
-      if (has('jukebox')) {
-        ui.rect(jx, jy + 6, jw, jh - 6, COLORS.woodDark);
-        this._disc(jx + jw / 2, jy + 9, 10, COLORS.woodLight);
-        ui.rect(jx + 1, jy + 9, jw - 2, jh - 9, COLORS.woodLight);
-        ui.rect(jx + 3, jy + 10, jw - 6, 8, COLORS.amber);
-        const hue = [COLORS.redLight, COLORS.gold, COLORS.sage, COLORS.blue];
-        for (let i = 0; i < 4; i++) ui.rect(jx + 3, jy + 20 + i * 3, jw - 6, 2, hue[(i + Math.floor(time * 4)) % 4]);
-        ui.rect(jx + 4, jy + jh - 4, jw - 8, 3, COLORS.ink);
-      } else if (hov === 'jukebox') outline(jx, jy, jw, jh);
-    }
-
-    // stools along the counter
-    {
-      if (has('stools')) {
-        for (let i = 0; i < 4; i++) {
-          const sx1 = X(0.56) + i * Math.round((cR - cL) / 4.3);
-          const sy1 = cTop + 12;
-          ui.rect(sx1, sy1, 14, 3, COLORS.redLight);
-          ui.rect(sx1, sy1 + 3, 14, 1, COLORS.red);
-          ui.rect(sx1 + 6, sy1 + 4, 2, 20, COLORS.bone);
-          ui.rect(sx1 + 2, sy1 + 24, 10, 2, COLORS.bone);
-        }
-      } else if (hov === 'stools') outline(X(0.56), cTop + 12, cR - X(0.56), 26);
-    }
-
-    // pool table in the middle of the floor
-    {
-      const tx = X(0.18), tw = Math.round(w * 0.3), ty = y + wallH + Math.round((h - wallH) * 0.4), th = 14;
-      if (has('pool')) {
-        ui.rect(tx, ty, tw, th, COLORS.woodDark);
-        ui.rect(tx + 3, ty + 2, tw - 6, th - 5, COLORS.felt);
-        ui.rect(tx + 3, ty + 2, tw - 6, 1, COLORS.feltLight);
-        for (const px of [tx + 2, tx + Math.floor(tw / 2) - 1, tx + tw - 4]) ui.rect(px, ty + 1, 2, 2, COLORS.black);
-        const balls = [COLORS.white, COLORS.redLight, COLORS.gold, COLORS.blue, COLORS.ink];
-        balls.forEach((c, i) => ui.rect(tx + 12 + i * 9 + (i % 2) * 3, ty + 4 + (i % 2) * 3, 2, 2, c));
-        ui.rect(tx + 6, ty + th, 3, 10, COLORS.woodDark);
-        ui.rect(tx + tw - 9, ty + th, 3, 10, COLORS.woodDark);
-      } else if (hov === 'pool') outline(tx, ty, tw, th + 10);
-    }
-
-    // potted palm, right corner
-    {
-      const px = X(0.97) - 8, py = y + h - 16;
-      if (has('plant')) {
-        ui.rect(px - 5, py, 11, 12, COLORS.leather);
-        ui.rect(px - 6, py, 13, 2, COLORS.amberDark);
-        const sway = Math.round(Math.sin(time * 0.8) * 1);
-        for (const [dx, dy, len] of [[-8, -10, 9], [3, -12, 9], [-4, -16, 6], [1, -6, 8], [-10, -4, 7]]) {
-          ui.rect(px + dx + sway, py + dy, len, 2, COLORS.sage);
-          ui.rect(px + dx + sway + 1, py + dy + 2, len - 3, 1, COLORS.feltLight);
-        }
-        ui.rect(px, py - 14, 1, 14, COLORS.wood);
-      } else if (hov === 'plant') outline(px - 12, py - 18, 24, 30);
-    }
-
-    // hanging lamps over the counter
-    if (has('lights')) {
-      for (let i = 0; i < 3; i++) {
-        const lx = X(0.6) + i * Math.round((cR - X(0.6)) / 3) + 10;
-        ui.rect(lx, y + 6, 1, 18, COLORS.ash);
-        ui.rect(lx - 4, y + 24, 9, 3, COLORS.sage);
-        ui.ditherRect(lx - 9, y + 27, 19, 30, COLORS.amber, 0.15);
-        ui.rect(lx - 1, y + 27, 3, 2, COLORS.lampGlow);
-      }
-    } else if (hov === 'lights') outline(X(0.6), y + 6, cR - X(0.6), 26);
-
-    // ceiling fan
-    {
-      const fx = X(0.68), fy = y + 10;
-      if (has('fan')) {
-        ui.rect(fx, y + 6, 1, 4, COLORS.ash);
-        const a = time * 6;
-        const len = Math.round(16 * Math.abs(Math.cos(a)));
-        ui.rect(fx - len, fy, len * 2 + 1, 2, COLORS.woodLight);
-        ui.rect(fx - 2, fy - 1, 5, 4, COLORS.bone);
-      } else if (hov === 'fan') outline(fx - 16, fy - 2, 33, 7);
-    }
-
-    // chandelier
-    {
-      const cx = X(0.3), cy = y + 6;
-      if (has('chandelier')) {
-        ui.rect(cx, cy, 1, 8, COLORS.gold);
-        ui.ditherRect(cx - 22, cy + 6, 45, 28, COLORS.goldLight, 0.18);
-        ui.rect(cx - 14, cy + 12, 29, 2, COLORS.gold);
-        ui.rect(cx - 9, cy + 16, 19, 2, COLORS.amber);
-        for (const dx of [-14, -7, 0, 7, 14]) {
-          ui.rect(cx + dx, cy + 8, 1, 4, COLORS.cream);
-          ui.rect(cx + dx, cy + 6 + (Math.floor(time * 5 + dx) % 2), 1, 2, COLORS.lampGlow);
-        }
-        ui.rect(cx - 1, cy + 18, 3, 4, COLORS.gold);
-      } else if (hov === 'chandelier') outline(cx - 15, cy, 31, 22);
-    }
-
-    if (!run.items.length) {
-      ui.textCentered('An empty room, a counter, one bulb.', x + w / 2, y + h - 12, COLORS.smoke);
+      if (this.flash) ui.textCentered(this.flash.text, vx + vw / 2, H - 16, this.flash.color, { shadow: COLORS.black });
     }
   }
 
-  _disc(cx, cy, r, color) {
-    for (let dy = -r; dy <= r; dy++) {
-      const dx = Math.floor(Math.sqrt(r * r - dy * dy));
-      this.ui.rect(Math.round(cx - dx), Math.round(cy + dy), dx * 2 + 1, 1, color);
-    }
+  _toScreen(v) {
+    const p = v.clone().project(this.camera);
+    if (p.z > 1 || p.z < -1) return null;
+    return { x: Math.round((p.x + 1) / 2 * this.ui.w), y: Math.round((1 - p.y) / 2 * this.ui.h) };
   }
 }

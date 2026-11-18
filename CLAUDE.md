@@ -48,7 +48,12 @@ src/
                          HUD (all on-screen UI), SideEvents (drink / roulette / cigar),
                          Overview (cash-out screen), meta.js (pure rules: mood, roulette payouts,
                          hidden luck, bar catalog, save/load), cast.js (names, lines)
-  bar/BarTycoon.js       your bar between nights (2D pixel scene + catalog)
+  bar/                   your bar between nights, a separate 3D scene you walk around in:
+                         BarScene.js (room, counter, bartender, customers, every catalog item as a
+                         3D group hidden until bought, colliders), BarTycoon.js (WASD + pointer-lock
+                         walking, E to use the catalog / back-room door, the catalog book with a
+                         top view that zooms to the hovered item and previews it). main.js renders
+                         bar.view instead of the back room while bar.active.
 tests/                   Vitest
 tools/blender/           Python scripts that build every model in public/models (see README)
 public/models/           exported .glb files
@@ -59,7 +64,8 @@ public/models/           exported .glb files
 menu -> night N at the table -> every 2-3 hands a random offer (drink / Russian roulette / cigar)
 -> **Cash out** (key 5) -> Overview (stats, money-per-hand bar graph, mafia mood bar) -> Your bar
 (spend the bar fund) -> night N+1. Half of each cash-out goes to the bar fund, half is the next
-night's stake. Going broke or dying at roulette ends the run and clears the save
+night's stake; whatever is not spent in the bar is added to that stake (`nextNight` in meta.js,
+also what the save holds). Going broke or dying at roulette ends the run and clears the save
 (`localStorage['bargambling.run.v1']`). Drinks give hidden luck (`makeLuckyDeckFn` in meta.js):
 never show the player that it exists.
 
@@ -74,14 +80,16 @@ never show the player that it exists.
 - Chip visuals must always match engine stacks. The controller checks this after every hand
   (`_checkSync`); if you change money outside the engine (e.g. roulette), update both.
 - Controls: 1 fold, 2 check/call, 3 raise, 4 all in, 5 cash out, E peek at cards, V top view,
-  Q puff cigar. Buttons show their number badge bottom-left. Keep README controls in sync.
+  Q puff cigar. Buttons show their number badge bottom-left. In the bar: WASD walk, click for
+  mouse look, E use (catalog / back-room door). Keep README controls in sync.
 - New sounds: call `sound.play('name')` at the moment; list the name in Sound.js.
 
 ## Testing in the browser
 
 `window.__holdem` (dev and prod) exposes: `start()`, `setSpeed(n)`, `autoplay(true, 'tight')`,
 `setStacks([...])`, `forceEvent('drink'|'roulette'|'cigar')`, `pick(n)` (choose an option in an
-open offer box), plus `game`, `controller`, `hud`. Use the Playwright MCP to open the dev server,
+open offer box), `visitBar(fund)` (cash out at your next turn and walk into your bar), plus
+`game`, `controller`, `hud`, `bar` (`bar.player`, `bar.openCatalog()`, `bar.world`). Use the Playwright MCP to open the dev server,
 drive these hooks, and take screenshots to check visual changes. Look at the screenshots before
 calling a visual change done. The threejs-devtools MCP can inspect the live scene.
 

@@ -16,6 +16,7 @@ import { CAST } from './holdem/game/cast.js';
 import { playerView } from './holdem/engine/engine.js';
 import { decide } from './holdem/ai/decide.js';
 import { PERSONALITIES } from './holdem/ai/personalities.js';
+import { BarTycoon } from './bar/BarTycoon.js';
 
 const pr = new PixelRenderer({ targetHeight: 360 });
 const ui = new PixelUI(pr);
@@ -66,6 +67,7 @@ async function boot() {
   const chips = new ChipManager({ scene, templates: props.chips, tweens });
   const cards = new CardManager({ scene, template: props.card, tweens });
   controller = new HoldemController({ room, chips, cards, hud: null, tweens, look, camera, ui, pr, fp: firstPerson(models.firstperson) });
+  controller.bar = new BarTycoon({ ui, pr, models, onBuy: (it) => controller.buy(it), onNextDay: () => controller.nextDay() });
   hud = new HUD({ ui, camera, controller });
   controller.hud = hud;
   const button = props.dealerButton.clone(true);
@@ -97,6 +99,18 @@ async function boot() {
     /** Pick option n (1-based) in an open offer/confirmation box. */
     pick(n) { const ch = hud.choice; if (ch) hud._pick(ch.options[n - 1].value); },
     get hud() { return hud; },
+    /** Your bar between nights: `bar.world` is the 3D room, `bar.player` is you (x, z, yaw). */
+    get bar() { return controller.bar; },
+    /** Testing: cash out at your next turn and go to your bar with `fund` in the bar fund. */
+    async visitBar(fund = 2000) {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      while (!hud.prompt || hud.choice || controller.cutscene) await wait(50);
+      controller.cashOutRequested = true;
+      hud._resolve({ type: 'fold' });
+      while (controller.phase !== 'overview') await wait(50);
+      controller.run.barFund = fund;
+      await controller.toBar();
+    },
   };
   controller.showMenu();
 }
@@ -132,7 +146,8 @@ function frame(now) {
     controller.handleClick();
   }
   ui.end();
-  pr.render(scene, camera);
+  const bar = controller?.bar?.active ? controller.bar.view : null;
+  pr.render(bar?.scene ?? scene, bar?.camera ?? camera);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -126,6 +126,14 @@ export function splitCashOut(cash) {
   return { toBar, stake: cash - toBar };
 }
 
+/**
+ * Leave the bar for the next night: whatever is left in the bar fund comes back to the table
+ * with you, added to the stake.
+ */
+export function nextNight(run) {
+  return { ...run, items: [...run.items], day: run.day + 1, stake: run.stake + run.barFund, barFund: 0 };
+}
+
 export function newRun() {
   return { day: 1, stake: FIRST_STAKE, barFund: 0, items: [], bestCashOut: 0 };
 }

@@ -114,7 +114,6 @@ export class HUD {
     }
     if (this.c.phase === 'over' && k === 'Enter') { this.c.cashOut('win'); return; }
     if (this.c.phase === 'overview' && k === 'Enter' && this.c.overview?.t > 1.6) { this.c.toBar(); return; }
-    if (this.c.phase === 'bar' && k === 'Enter') { this.c.nextDay(); return; }
     if (!this.prompt || this.c.phase !== 'playing' || this.c.cutscene) return;
     if (this.raiseInput) {
       const ri = this.raiseInput;

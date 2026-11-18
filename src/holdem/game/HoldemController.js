@@ -9,9 +9,8 @@ import { ease } from '../../shared/anim/Tweens.js';
 import { sound } from '../../shared/audio/Sound.js';
 import { COLORS } from '../../shared/render/palette.js';
 import { SideEvents } from './SideEvents.js';
-import { BarTycoon } from '../../bar/BarTycoon.js';
 import {
-  newRun, loadRun, saveRun, clearRun, opponentStack, nextEventGap, makeLuckyDeckFn, mafiaMood, splitCashOut,
+  newRun, loadRun, saveRun, clearRun, opponentStack, nextEventGap, makeLuckyDeckFn, mafiaMood, splitCashOut, nextNight,
 } from './meta.js';
 
 const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
@@ -19,6 +18,10 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const CARD_Y = TABLE_HEIGHT + 0.002;
 const CARD_LEN = 0.105;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+/** The revolver lying on its side on the felt. */
+// (roll 90 degrees onto its side so the cylinder faces up, then turn the barrel off to your left)
+const GUN_REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2 + 0.4)
+  .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2));
 
 export class HoldemController {
   constructor({ room, chips, cards, hud, tweens, look, camera, ui, pr, fp }) {
@@ -62,7 +65,7 @@ export class HoldemController {
     this.topView = false;
     this.extraSpeech = null;
     this.side = new SideEvents(this);
-    this.bar = new BarTycoon({ ui, onBuy: (it) => this.buy(it), onNextDay: () => this.nextDay() });
+    this.bar = null; // your bar between nights (BarTycoon), set up by main.js once the models load
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       if (this.hud?.choice) return;
@@ -246,14 +249,16 @@ export class HoldemController {
     await this._fade('fadeAll', 0, 0.6);
   }
 
-  _saveForTomorrow() { saveRun({ ...this.run, day: this.run.day + 1 }); }
+  _saveForTomorrow() { saveRun(nextNight(this.run)); }
 
   async toBar() {
     if (this.phase !== 'overview') return;
     this.phase = 'black';
     await this._fade('fadeAll', 1, 0.4);
+    this.bar.enter(this.run);
     this.phase = 'bar';
-    await this._fade('fadeAll', 0, 0.4);
+    sound.play('footsteps');
+    await this._fade('fadeAll', 0, 0.6);
   }
 
   buy(item) {
@@ -262,14 +267,16 @@ export class HoldemController {
     this.run.items.push(item.id);
     this._saveForTomorrow();
     sound.play('buy');
-    this.bar.note(item.id === 'portrait' ? 'The family will hear you hung the Don on your wall.' : `${item.name} - it's in.`);
+    this.bar.bought(item, item.id === 'portrait' ? 'The family will hear you hung the Don on your wall.' : `${item.name} - it's in.`);
   }
 
+  /** Through the back-room door: the money left in the bar fund comes to the table with you. */
   async nextDay() {
     if (this.phase !== 'bar') return;
     this.phase = 'black';
     await this._fade('fadeAll', 1, 0.5);
-    this.run.day += 1;
+    this.bar.leave();
+    this.run = nextNight(this.run);
     this.room.reset();
     await this._sitDown();
   }
@@ -850,14 +857,30 @@ export class HoldemController {
     await this._gunFire('You ran out of chips.');
   }
 
+  /** Height for the gun's origin (its grip) so that, turned to `quat`, its lowest point just touches the felt. */
+  _gunRestHeight(quat) {
+    const gun = this.fp.gun;
+    const p = gun.position.clone(), q = gun.quaternion.clone();
+    gun.position.set(0, 0, 0);
+    gun.quaternion.copy(quat);
+    gun.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(gun, true);
+    gun.position.copy(p);
+    gun.quaternion.copy(q);
+    gun.updateMatrixWorld(true);
+    return TABLE_HEIGHT + 0.003 - (box.isEmpty() ? 0 : box.min.y);
+  }
+
   /** Someone slides the revolver across the felt to you. */
   async _gunSlide(thrower) {
     const ch = this.room.characters[thrower];
     const gun = this.fp.gun;
     if (gun.parent !== this.fp.scene) this.fp.scene.attach(gun);
     const from = ch ? ch.root.localToWorld(V(0.14, 0.88, 0.5)) : V(0, 0.9, -0.6);
-    const land = V(0.06, TABLE_HEIGHT + 0.014, 0.4);
-    const rest = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, -Math.PI / 2 + 0.4, 'YXZ'));
+    const rest = GUN_REST.clone();
+    // the origin is the grip, not the bottom of the gun: lift it so it lies on the felt, not in it
+    const restY = this._gunRestHeight(rest);
+    const land = V(0.06, restY, 0.4);
     this._gunFrom = from;
     gun.visible = true;
     gun.position.copy(from);
@@ -868,7 +891,7 @@ export class HoldemController {
       duration: 0.9, easing: ease.linear,
       update: (t) => {
         gun.position.lerpVectors(from, land, t);
-        gun.position.y += Math.sin(Math.PI * t) * 0.32;
+        gun.position.y = Math.max(gun.position.y, restY) + Math.sin(Math.PI * t) * 0.32;
         spin.setFromAxisAngle(V(0, 1, 0), (1 - t) * Math.PI * 5);
         gun.quaternion.copy(rest).premultiply(spin);
       },
@@ -884,11 +907,13 @@ export class HoldemController {
   async _gunPickUp() {
     const gun = this.fp.gun;
     const hand = this.fp.grip;
-    const grabAt = gun.position.clone().add(V(0, 0.035, 0));
-    const hFrom = V(0.34, 0.45, 1.0);
     const handPose = new THREE.Object3D();
+    handPose.lookAt(V(-0.45, -0.05, -1));
+    // lifted far enough that the gun, turned upright in the hand, stays above the felt
+    const grabAt = gun.position.clone().add(V(0, 0.035, 0));
+    grabAt.y = Math.max(grabAt.y, this._gunRestHeight(handPose.quaternion) + 0.01);
     handPose.position.copy(grabAt);
-    handPose.lookAt(grabAt.clone().add(V(-0.45, -0.05, -1)));
+    const hFrom = V(0.34, 0.45, 1.0);
     hand.visible = true;
     hand.position.copy(hFrom);
     hand.quaternion.copy(handPose.quaternion);
@@ -982,9 +1007,21 @@ export class HoldemController {
     await this.tweens.add({ duration: 0.45, easing: ease.inOutQuad, update: (t) => hand.position.lerpVectors(hFrom, V(0.34, 0.45, 1.0), t) });
     hand.visible = false;
     const gp = gun.position.clone();
-    const to = this._gunFrom ? this._gunFrom.clone().setY(TABLE_HEIGHT + 0.014).lerp(V(0, TABLE_HEIGHT + 0.014, 0), 0.4) : V(0, TABLE_HEIGHT + 0.014, -0.4);
+    const gq = gun.quaternion.clone();
+    // lay it back on its side, resting on the felt, then slide it back across
+    const rest = GUN_REST.clone().premultiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI));
+    const restY = this._gunRestHeight(rest);
+    const to = this._gunFrom ? this._gunFrom.clone().setY(restY).lerp(V(0, restY, 0), 0.4) : V(0, restY, -0.4);
     sound.play('slide');
-    await this.tweens.add({ duration: 0.7, easing: ease.outCubic, update: (t) => gun.position.lerpVectors(gp, to, t) });
+    await this.tweens.add({
+      duration: 0.7, easing: ease.outCubic,
+      update: (t) => {
+        gun.quaternion.copy(gq).slerp(rest, Math.min(1, t * 2.5));
+        gun.position.lerpVectors(gp, to, t);
+        // never lower than resting on the felt in its current tilt
+        gun.position.y = Math.max(gun.position.y, this._gunRestHeight(gun.quaternion));
+      },
+    });
     await this.tweens.wait(0.2);
     this._hideFirstPerson();
   }
