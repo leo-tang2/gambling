@@ -4,18 +4,29 @@ import { paintTexture, hashNoise } from '../shared/render/textures.js';
 import { drawText, textWidth } from '../shared/ui/font.js';
 import { makeBartender, makeGlass, makeAshtray, Smoke } from '../holdem/scene/Extras.js';
 import { Character } from '../holdem/scene/BackRoom.js';
+import { HORSES } from './horseRace.js';
 
 // Your own bar, as a room you walk around in. Metres; +z points from the counter to the
-// street door. Everything is built from boxes and cylinders in palette colours, like the
-// back room, so the post pass snaps it to the same pixel look.
+// street door. The people, the horse-race table and the shooting gallery come from bar.glb
+// (tools/blender/bar.py); the room and the smaller catalog items are built here from boxes in
+// palette colours. Everything goes through the same pixel post pass as the back room.
 
-export const ROOM = { x0: -4, x1: 4, z0: -3, z1: 3, h: 3 };
+export const ROOM = { x0: -7, x1: 7, z0: -5, z1: 5, h: 3.4 };
 export const EYE = 1.6;
-export const START = { x: 0, z: 2.2, yaw: 0 };
+export const START = { x: 0, z: 4.1, yaw: 0 };
 /** The catalog lies open on the back bar, behind the counter. */
-export const BOOK = new THREE.Vector3(1.15, 0.97, -2.74);
+export const BOOK = new THREE.Vector3(1.6, 0.97, -4.74);
 /** The door to the back room (and the next night at the table), in the left wall. */
-export const BACK_DOOR = new THREE.Vector3(-3.95, 1.0, 1.9);
+export const BACK_DOOR = new THREE.Vector3(-6.95, 1.0, 3.4);
+/** The front counter: x0..x1 along the bar, its top at y, the customer's edge at zFront. */
+export const COUNTER = { x0: -5.6, x1: 1.6, z: -2.7, zFront: -2.42, y: 1.075 };
+const TAP = new THREE.Vector3(-2.0, 0.945, -4.62);
+const BARTENDER_Z = -3.7;
+/** Where the horse-race table and the shooting gallery stand once you've bought them. */
+export const HORSE_TABLE = { pos: new THREE.Vector3(3.6, 0, -1.4), rotY: 0 };
+export const GALLERY = { pos: new THREE.Vector3(5.05, 0, 2.2), rotY: -Math.PI / 2 };
+/** Horses run along the track's local x from START_X to FINISH_X, lane k at local z LANES[k]. */
+export const TRACK = { y: 0.873, startX: -0.84, finishX: 0.84, lanes: [0.3, 0.1, -0.1, -0.3] };
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (name) => new THREE.Color(COLORS[name] ?? name);
@@ -50,6 +61,20 @@ function light(parent, color, intensity, distance, x, y, z, decay = 2) {
   return l;
 }
 
+/** A copy of a node from bar.glb, sitting at its own origin, with Blender's ".001" suffixes gone. */
+function fromModel(models, name) {
+  const src = models.bar?.getObjectByName(name);
+  if (!src) return null;
+  const o = src.clone(true);
+  o.position.set(0, 0, 0);
+  o.rotation.set(0, 0, 0);
+  o.traverse((c) => {
+    const m = /^(Head|UpperArmR|ForeArmR|HandTipR)[_.\d]*$/.exec(c.name);
+    if (m) c.name = m[1];
+  });
+  return o;
+}
+
 // ---------------- painted textures ----------------
 
 function floorTexture() {
@@ -63,7 +88,7 @@ function floorTexture() {
     }
   });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(8, 6);
+  t.repeat.set((ROOM.x1 - ROOM.x0) * 2, (ROOM.z1 - ROOM.z0) * 2);
   return t;
 }
 
@@ -124,117 +149,142 @@ function bookTexture() {
   });
 }
 
+/** A painted sign: "DERBY" over the horse table, "SHOOT" over the gallery. */
+function signTexture(word, fg, bg) {
+  const w = textWidth(word, 1) + 8;
+  return paintTexture(w, 12, (ctx) => {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, 12);
+    ctx.fillStyle = COLORS.gold;
+    ctx.fillRect(0, 0, w, 1); ctx.fillRect(0, 11, w, 1);
+    drawText(ctx, word, 4, 3, fg);
+  });
+}
+
 // ---------------- the things you can buy ----------------
-// Each builder fills `g` (the item's group, already in the scene) and returns
-//   focus: where the catalog camera zooms to, view: direction from the focus to the camera,
-//   dist: how far back, colliders: [x0, z0, x1, z1] boxes you can't walk through,
-//   update(dt, t): little animations.
+// Each builder fills `g` in the item's own coordinates (front facing +z, floor at y = 0) and
+// returns: focus (where the catalog camera zooms to) and view (direction from the focus to the
+// camera), both local; dist; solid (blocks walking: its floor box), or colliders (local boxes
+// [x0, z0, x1, z1]); update(dt, t) for little animations.
+
+const LAYOUT = {
+  stools: { pos: [-2.05, -2.05], rot: 0 },
+  plant: { pos: [6.3, -4.3], rot: 0 },
+  dartboard: { pos: [6.97, -2.6], rot: -Math.PI / 2 },
+  lights: { pos: [0, 0], rot: 0 },
+  shelf: { pos: [-2, -4.86], rot: 0 },
+  fan: { pos: [1.4, 2.4], rot: 0 },
+  neon: { pos: [-0.7, -4.94], rot: 0 },
+  portrait: { pos: [-6.97, 1.2], rot: Math.PI / 2 },
+  jukebox: { pos: [-6.65, -1.2], rot: Math.PI / 2 },
+  horses: { pos: [HORSE_TABLE.pos.x, HORSE_TABLE.pos.z], rot: HORSE_TABLE.rotY },
+  piano: { pos: [3.6, 4.62], rot: Math.PI },
+  gallery: { pos: [GALLERY.pos.x, GALLERY.pos.z], rot: GALLERY.rotY },
+  pool: { pos: [1.4, 2.4], rot: 0 },
+  aquarium: { pos: [-4.4, 4.7], rot: Math.PI },
+  chandelier: { pos: [-4.4, 0.6], rot: 0 },
+};
 
 const BUILDERS = {
   stools(g) {
     const leather = M('redLight'), chrome = M('bone', { roughness: 0.4 }), dark = M('ash');
     const colliders = [];
-    for (let i = 0; i < 5; i++) {
-      const x = -2.4 + i * 0.85, z = -1.02;
-      cyl(g, 0.17, 0.16, 0.07, leather, x, 0.78, z, 12);
-      cyl(g, 0.15, 0.15, 0.02, M('red'), x, 0.735, z, 12);
-      cyl(g, 0.028, 0.028, 0.7, chrome, x, 0.38, z, 6);
-      cyl(g, 0.11, 0.11, 0.015, chrome, x, 0.3, z, 10);
-      cyl(g, 0.19, 0.21, 0.03, dark, x, 0.015, z, 10);
-      colliders.push([x - 0.18, z - 0.18, x + 0.18, z + 0.18]);
+    for (let i = 0; i < 8; i++) {
+      const x = -3.15 + i * 0.9;
+      cyl(g, 0.17, 0.16, 0.07, leather, x, 0.78, 0, 12);
+      cyl(g, 0.15, 0.15, 0.02, M('red'), x, 0.735, 0, 12);
+      cyl(g, 0.028, 0.028, 0.7, chrome, x, 0.38, 0, 6);
+      cyl(g, 0.11, 0.11, 0.015, chrome, x, 0.3, 0, 10);
+      cyl(g, 0.19, 0.21, 0.03, dark, x, 0.015, 0, 10);
+      colliders.push([x - 0.18, -0.18, x + 0.18, 0.18]);
     }
-    return { focus: V(-0.7, 0.75, -1.05), view: V(0.15, 0.7, 1), dist: 3.4, colliders };
+    return { focus: V(0, 0.75, 0), view: V(0.15, 0.75, 1), dist: 5, colliders };
   },
 
   plant(g) {
-    const x = 3.45, z = -2.5;
-    cyl(g, 0.24, 0.18, 0.42, M('leather'), x, 0.21, z, 10);
-    cyl(g, 0.25, 0.25, 0.04, M('amberDark'), x, 0.43, z, 10);
-    cyl(g, 0.21, 0.21, 0.02, M('woodDark'), x, 0.42, z, 10);
-    cyl(g, 0.025, 0.035, 0.9, M('wood'), x, 0.85, z, 6);
+    cyl(g, 0.3, 0.22, 0.5, M('leather'), 0, 0.25, 0, 10);
+    cyl(g, 0.31, 0.31, 0.04, M('amberDark'), 0, 0.51, 0, 10);
+    cyl(g, 0.27, 0.27, 0.02, M('woodDark'), 0, 0.5, 0, 10);
+    cyl(g, 0.03, 0.045, 1.2, M('wood'), 0, 1.05, 0, 6);
     const crown = new THREE.Group();
-    crown.position.set(x, 1.28, z);
+    crown.position.set(0, 1.62, 0);
     g.add(crown);
     const leafA = M('sage'), leafB = M('feltLight');
-    for (let i = 0; i < 9; i++) {
-      const a = (i / 9) * Math.PI * 2;
+    for (let i = 0; i < 10; i++) {
       const arm = new THREE.Group();
-      arm.rotation.set(0, a, 0);
+      arm.rotation.set(0, (i / 10) * Math.PI * 2, 0);
       crown.add(arm);
-      const leaf = box(arm, 0.09, 0.02, 0.55, i % 2 ? leafA : leafB, 0, 0, 0.27);
+      const leaf = box(arm, 0.11, 0.02, 0.7, i % 2 ? leafA : leafB, 0, 0, 0.34);
       leaf.rotation.x = 0.45 + (i % 3) * 0.18;
     }
     return {
-      focus: V(x, 1.0, z), view: V(-0.9, 0.5, 1), dist: 2.2, colliders: [[x - 0.3, z - 0.3, x + 0.3, z + 0.3]],
+      focus: V(0, 1.2, 0), view: V(-0.9, 0.5, 1), dist: 2.8, solid: true,
       update: (dt, t) => { crown.rotation.z = Math.sin(t * 0.7) * 0.04; crown.rotation.x = Math.sin(t * 0.5 + 1) * 0.03; },
     };
   },
 
   dartboard(g) {
-    const x = 3.97, y = 1.65, z = -1.0;
-    const disc = (r, mat, dx) => {
-      const o = cyl(g, r, r, 0.02, mat, x - dx, y, z, 20);
-      o.rotation.z = Math.PI / 2;
-      return o;
+    const y = 1.65;
+    const disc = (r, mat, dz) => {
+      const o = cyl(g, r, r, 0.02, mat, 0, y, dz, 20);
+      o.rotation.x = Math.PI / 2;
     };
-    box(g, 0.04, 0.7, 0.7, M('woodDark'), x + 0.005, y, z);
+    box(g, 0.7, 0.7, 0.04, M('woodDark'), 0, y, 0.0);
     disc(0.25, M('ink'), 0.03);
     disc(0.21, M('cream'), 0.04);
     disc(0.17, M('red'), 0.05);
     disc(0.12, M('cream'), 0.06);
     disc(0.07, M('sage'), 0.07);
     disc(0.025, M('redLight'), 0.08);
-    for (const [dy, dz] of [[0.05, 0.03], [-0.08, -0.06], [0.1, -0.1]]) {
-      const dart = box(g, 0.14, 0.012, 0.012, M('gold'), x - 0.15, y + dy, z + dz);
-      dart.rotation.z = 0.15;
-      box(g, 0.03, 0.03, 0.004, M('redLight'), x - 0.21, y + dy + 0.01, z + dz);
+    for (const [dy, dx] of [[0.05, 0.03], [-0.08, -0.06], [0.1, -0.1]]) {
+      const dart = box(g, 0.012, 0.012, 0.14, M('gold'), dx, y + dy, 0.15);
+      dart.rotation.x = 0.15;
+      box(g, 0.03, 0.03, 0.004, M('redLight'), dx, y + dy + 0.01, 0.21);
     }
-    return { focus: V(x - 0.05, y, z), view: V(-1, 0.15, 0.25), dist: 1.5, colliders: [] };
+    return { focus: V(0, y, 0.05), view: V(0.25, 0.15, 1), dist: 1.6 };
   },
 
   lights(g) {
     const shade = M('sage', { side: THREE.DoubleSide }), cord = M('ink');
-    const bulbs = [];
-    for (const x of [-2.0, -0.7, 0.6]) {
-      const z = -1.62;
-      box(g, 0.012, 0.65, 0.012, cord, x, ROOM.h - 0.325, z);
-      const s = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.18, 12, 1, true), shade);
-      s.position.set(x, ROOM.h - 0.72, z);
+    for (const x of [-4.6, -2.0, 0.6]) {
+      const z = COUNTER.z;
+      box(g, 0.012, 0.75, 0.012, cord, x, ROOM.h - 0.375, z);
+      const s = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.2, 12, 1, true), shade);
+      s.position.set(x, ROOM.h - 0.84, z);
       g.add(s);
-      cyl(g, 0.05, 0.05, 0.05, M('ash'), x, ROOM.h - 0.64, z, 8);
-      const b = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), glow('lampGlow', 2.2));
-      b.position.set(x, ROOM.h - 0.8, z);
+      cyl(g, 0.05, 0.05, 0.05, M('ash'), x, ROOM.h - 0.75, z, 8);
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), glow('lampGlow', 2.2));
+      b.position.set(x, ROOM.h - 0.93, z);
       g.add(b);
-      bulbs.push(light(g, 'gold', 2.6, 4.5, x, ROOM.h - 0.88, z, 1.8));
+      light(g, 'gold', 3.2, 5, x, ROOM.h - 1.0, z, 1.8);
     }
-    return { focus: V(-0.7, 2.1, -1.62), view: V(0.1, -0.15, 1), dist: 3.2, colliders: [], lit: true };
+    return { focus: V(-2, 2.3, COUNTER.z), view: V(0.1, -0.15, 1), dist: 4.6 };
   },
 
   shelf(g) {
     const plank = M('woodLight'), bracket = M('ash');
     const bottleCols = ['amber', 'sage', 'redLight', 'gold', 'cream', 'blue', 'amberMid', 'feltLight', 'red'];
     const r = hashNoise(5);
-    for (const [k, y] of [1.45, 1.95].entries()) {
-      box(g, 4.6, 0.04, 0.28, plank, -0.6, y, -2.84);
-      for (let x = -2.8; x <= 1.6; x += 1.1) box(g, 0.03, 0.12, 0.2, bracket, x, y - 0.08, -2.88);
-      for (let x = -2.78, i = 0; x < 1.6; x += 0.14 + r() * 0.06, i++) {
+    for (const [k, y] of [1.55, 2.1].entries()) {
+      box(g, 7.6, 0.04, 0.28, plank, 0, y, 0.12);
+      for (let x = -3.6; x <= 3.6; x += 1.2) box(g, 0.03, 0.12, 0.2, bracket, x, y - 0.08, 0.08);
+      for (let x = -3.7, i = 0; x < 3.7; x += 0.14 + r() * 0.06, i++) {
         const c = bottleCols[(i * 4 + k * 3) % bottleCols.length];
         const h = 0.2 + r() * 0.12;
         const m = M(c, { emissive: col(c), emissiveIntensity: 0.12, roughness: 0.3 });
-        cyl(g, 0.035, 0.04, h, m, x, y + 0.02 + h / 2, -2.82 + (r() - 0.5) * 0.08, 7);
-        cyl(g, 0.012, 0.018, 0.07, m, x, y + 0.02 + h + 0.035, -2.82, 6);
-        if (i % 3 === 0) box(g, 0.05, 0.05, 0.004, M('paper'), x, y + 0.02 + h * 0.45, -2.78);
+        cyl(g, 0.035, 0.04, h, m, x, y + 0.02 + h / 2, 0.14 + (r() - 0.5) * 0.08, 7);
+        cyl(g, 0.012, 0.018, 0.07, m, x, y + 0.02 + h + 0.035, 0.14, 6);
+        if (i % 3 === 0) box(g, 0.05, 0.05, 0.004, M('paper'), x, y + 0.02 + h * 0.45, 0.18);
       }
     }
-    return { focus: V(-0.6, 1.72, -2.8), view: V(0, 0.12, 1), dist: 2.4, colliders: [] };
+    return { focus: V(0, 1.85, 0.1), view: V(0, 0.12, 1), dist: 3.4 };
   },
 
   fan(g) {
-    const x = 1.4, z = 1.0;
-    box(g, 0.025, 0.4, 0.025, M('ash'), x, ROOM.h - 0.2, z);
-    cyl(g, 0.11, 0.13, 0.12, M('bone', { roughness: 0.5 }), x, ROOM.h - 0.45, z, 12);
+    box(g, 0.025, 0.4, 0.025, M('ash'), 0, ROOM.h - 0.2, 0);
+    cyl(g, 0.11, 0.13, 0.12, M('bone', { roughness: 0.5 }), 0, ROOM.h - 0.45, 0, 12);
     const rotor = new THREE.Group();
-    rotor.position.set(x, ROOM.h - 0.52, z);
+    rotor.position.set(0, ROOM.h - 0.52, 0);
     g.add(rotor);
     const blade = M('woodLight');
     for (let i = 0; i < 4; i++) {
@@ -246,146 +296,201 @@ const BUILDERS = {
       box(arm, 0.04, 0.02, 0.14, M('gold'), 0, 0.005, 0.1);
     }
     return {
-      focus: V(x, 2.45, z), view: V(0.35, -0.5, 1), dist: 1.9, colliders: [],
+      focus: V(0, ROOM.h - 0.55, 0), view: V(0.35, -0.5, 1), dist: 1.9,
       update: (dt) => { rotor.rotation.y += dt * 4.2; },
     };
   },
 
   neon(g) {
-    const x = -0.05, y = 2.48, z = -2.94; // between two of the hanging lamps
+    const y = 2.8;
     const tex = neonTexture();
     const sign = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 1.6, color: 0xffffff });
-    box(g, 1.06, 0.4, 0.05, M('ink'), x, y, z - 0.01);
+    box(g, 1.06, 0.4, 0.05, M('ink'), 0, y, 0);
     const face = new THREE.Mesh(new THREE.PlaneGeometry(0.98, 0.34), sign);
-    face.position.set(x, y, z + 0.02);
+    face.position.set(0, y, 0.03);
     g.add(face);
-    const l = light(g, 'redLight', 2.2, 3.5, x, y, z + 0.35, 1.8);
+    const l = light(g, 'redLight', 2.4, 4, 0, y, 0.4, 1.8);
     let off = 0;
     return {
-      focus: V(x, y, z), view: V(0, -0.15, 1), dist: 2.1, colliders: [],
+      focus: V(0, y, 0), view: V(0, -0.15, 1), dist: 2.1,
       update: (dt, t) => {
         off -= dt;
         if (off < -3 - Math.random() * 6) off = 0.12 + Math.random() * 0.2;
         const on = off <= 0 || Math.sin(t * 60) > 0.3;
         sign.emissiveIntensity = on ? 1.6 : 0.25;
-        l.intensity = on ? 2.2 : 0.3;
+        l.intensity = on ? 2.4 : 0.3;
       },
     };
   },
 
   portrait(g) {
-    const x = -3.96, y = 1.7, z = 0.8;
-    box(g, 0.05, 0.78, 0.64, M('gold', { roughness: 0.5 }), x, y, z);
-    box(g, 0.06, 0.7, 0.56, M('amberDark'), x + 0.003, y, z);
+    const y = 1.9;
+    box(g, 0.64, 0.78, 0.05, M('gold', { roughness: 0.5 }), 0, y, 0);
+    box(g, 0.56, 0.7, 0.06, M('amberDark'), 0, y, 0.003);
     const pic = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.64), new THREE.MeshStandardMaterial({ map: portraitTexture(), roughness: 0.9 }));
-    pic.position.set(x + 0.04, y, z);
-    pic.rotation.y = Math.PI / 2;
+    pic.position.set(0, y, 0.04);
     g.add(pic);
-    // a little picture lamp over the frame
-    box(g, 0.1, 0.03, 0.34, M('gold'), x + 0.08, y + 0.47, z);
-    light(g, 'lampGlow', 0.7, 1.4, x + 0.25, y + 0.42, z, 2);
-    return { focus: V(x, y, z), view: V(1, 0.05, 0.15), dist: 1.35, colliders: [] };
+    box(g, 0.34, 0.03, 0.1, M('gold'), 0, y + 0.47, 0.08);
+    light(g, 'lampGlow', 0.8, 1.4, 0, y + 0.42, 0.25, 2);
+    return { focus: V(0, y, 0), view: V(0.15, 0.05, 1), dist: 1.4 };
   },
 
   jukebox(g) {
-    const x = -3.68, z = -0.4;
     const body = M('woodDark'), trim = M('woodLight');
-    box(g, 0.45, 1.15, 0.62, body, x, 0.575, z);
-    const top = cyl(g, 0.31, 0.31, 0.45, trim, x, 1.15, z, 14);
-    top.rotation.z = Math.PI / 2;
-    top.scale.set(1, 1, 1);
-    box(g, 0.02, 0.32, 0.46, glow('amber', 0.9), x + 0.23, 0.98, z);
+    box(g, 0.62, 1.15, 0.45, body, 0, 0.575, 0);
+    const top = cyl(g, 0.31, 0.31, 0.45, trim, 0, 1.15, 0, 14);
+    top.rotation.x = Math.PI / 2;
+    box(g, 0.46, 0.32, 0.02, glow('amber', 0.9), 0, 0.98, 0.23);
     const bands = [];
     const hues = ['redLight', 'gold', 'sage', 'blue'];
     for (let i = 0; i < 4; i++) {
       const m = glow(hues[i], 1.2);
       bands.push(m);
-      box(g, 0.02, 0.05, 0.5, m, x + 0.23, 0.72 - i * 0.09, z);
+      box(g, 0.5, 0.05, 0.02, m, 0, 0.72 - i * 0.09, 0.23);
     }
-    box(g, 0.03, 0.12, 0.4, M('ink'), x + 0.23, 0.2, z);
-    const l = light(g, 'amber', 1.4, 2.6, x + 0.55, 0.9, z, 1.8);
+    box(g, 0.4, 0.12, 0.03, M('ink'), 0, 0.2, 0.23);
+    const l = light(g, 'amber', 1.6, 3, 0, 0.9, 0.55, 1.8);
     return {
-      focus: V(x, 0.9, z), view: V(1, 0.3, 0.25), dist: 2.0, colliders: [[x - 0.25, z - 0.35, x + 0.26, z + 0.35]],
+      focus: V(0, 0.9, 0), view: V(0.25, 0.3, 1), dist: 2.0, solid: true,
       update: (dt, t) => {
         const k = Math.floor(t * 4);
         bands.forEach((m, i) => m.emissive.set(COLORS[hues[(i + k) % 4]]));
-        l.intensity = 1.2 + Math.sin(t * 3) * 0.25;
+        l.intensity = 1.4 + Math.sin(t * 3) * 0.25;
       },
     };
   },
 
+  horses(g, ctx) {
+    const track = fromModel(ctx.models, 'HorseTrack');
+    if (track) g.add(track);
+    else {
+      box(g, 2.0, 0.05, 1.1, M('wood'), 0, 0.835, 0);
+      box(g, 1.86, 0.012, 0.8, M('feltMid'), 0, 0.866, 0);
+      for (const sx of [-0.9, 0.9]) for (const sz of [-0.45, 0.45]) box(g, 0.07, 0.8, 0.07, M('woodDark'), sx, 0.4, sz);
+    }
+    const horses = HORSES.map((_, k) => {
+      let h = fromModel(ctx.models, `Horse_${k + 1}`);
+      if (!h) {
+        h = new THREE.Group();
+        box(h, 0.15, 0.065, 0.06, M('bone'), 0, 0.14, 0);
+        box(h, 0.06, 0.05, 0.07, M(['redLight', 'blue', 'sage', 'amber'][k]), 0, 0.2, 0);
+      }
+      h.position.set(TRACK.startX, TRACK.y, TRACK.lanes[k]);
+      g.add(h);
+      return h;
+    });
+    const crown = fromModel(ctx.models, 'Crown') ?? (() => {
+      const c = new THREE.Group();
+      cyl(c, 0.032, 0.032, 0.03, glow('gold', 0.5), 0, 0.015, 0, 8);
+      return c;
+    })();
+    crown.visible = false;
+    g.add(crown);
+    // a little sign on a post so the table reads from across the room
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.17), new THREE.MeshStandardMaterial({ map: signTexture('DERBY', COLORS.amber, COLORS.ink), roughness: 0.8 }));
+    sign.position.set(-1.12, 1.5, -0.3);
+    g.add(sign);
+    box(g, 0.03, 1.42, 0.03, M('gold'), -1.12, 0.71, -0.33);
+    light(g, 'lampGlow', 1.6, 2.6, 0, 1.9, 0, 2);
+    ctx.scene.race = { group: g, horses, crown };
+    return { focus: V(0, 0.9, 0), view: V(0.0, 1.1, 1.1), dist: 2.4, solid: true };
+  },
+
   piano(g) {
-    const x = 3.68, z = 1.65;
     const black = M('ink', { roughness: 0.45 });
-    box(g, 0.55, 1.25, 1.5, black, x, 0.625, z);
-    box(g, 0.3, 0.06, 1.42, black, x - 0.4, 0.72, z);
-    box(g, 0.2, 0.03, 1.36, M('cream'), x - 0.42, 0.765, z);
+    box(g, 1.5, 1.25, 0.55, black, 0, 0.625, 0);
+    box(g, 1.42, 0.06, 0.3, black, 0, 0.72, 0.4);
+    box(g, 1.36, 0.03, 0.2, M('cream'), 0, 0.765, 0.42);
     for (let i = 0; i < 18; i++) {
       if (i % 7 === 2 || i % 7 === 6) continue;
-      box(g, 0.1, 0.03, 0.035, black, x - 0.38, 0.79, z - 0.63 + i * 0.075);
+      box(g, 0.035, 0.03, 0.1, black, -0.63 + i * 0.075, 0.79, 0.38);
     }
-    box(g, 0.04, 0.3, 1.3, M('woodDark'), x - 0.29, 0.98, z); // music desk
-    for (const dz of [-0.65, 0.65]) box(g, 0.08, 0.7, 0.08, black, x - 0.45, 0.35, z + dz);
-    // bench
-    box(g, 0.36, 0.06, 0.85, M('leather'), x - 0.95, 0.48, z);
-    for (const dz of [-0.36, 0.36]) for (const dx of [-0.14, 0.14]) box(g, 0.04, 0.45, 0.04, black, x - 0.95 + dx, 0.225, z + dz);
-    return { focus: V(x - 0.3, 0.9, z), view: V(-1, 0.45, 0.3), dist: 2.5, colliders: [[x - 1.15, z - 0.78, x + 0.3, z + 0.78]] };
+    box(g, 1.3, 0.3, 0.04, M('woodDark'), 0, 0.98, 0.29);
+    for (const dx of [-0.65, 0.65]) box(g, 0.08, 0.7, 0.08, black, dx, 0.35, 0.45);
+    box(g, 0.85, 0.06, 0.36, M('leather'), 0, 0.48, 0.95);
+    for (const dx of [-0.36, 0.36]) for (const dz of [-0.14, 0.14]) box(g, 0.04, 0.45, 0.04, black, dx, 0.225, 0.95 + dz);
+    return { focus: V(0, 0.9, 0.3), view: V(0.3, 0.45, 1), dist: 2.6, solid: true };
+  },
+
+  gallery(g, ctx) {
+    const booth = fromModel(ctx.models, 'Gallery');
+    if (booth) g.add(booth);
+    else {
+      box(g, 2.6, 1.0, 0.36, M('redMid'), 0, 0.5, 0.18);
+      box(g, 2.6, 2.3, 0.06, M('navy'), 0, 1.15, -1.9);
+    }
+    booth?.traverse((o) => {
+      if (o.isMesh && o.name.startsWith('GalleryBulbs')) {
+        o.material = o.material.clone();
+        o.material.emissive = col('lampGlow');
+        o.material.emissiveIntensity = 1.6;
+        o.castShadow = false;
+      }
+    });
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.24), new THREE.MeshStandardMaterial({ map: signTexture('SHOOT', COLORS.cream, COLORS.red), roughness: 0.8 }));
+    sign.position.set(0, 2.62, 0.38);
+    g.add(sign);
+    light(g, 'lampGlow', 3.0, 4, 0, 2.0, -0.4, 1.8);
+    light(g, 'amber', 1.2, 3, 0, 2.0, 0.8, 1.8);
+    ctx.scene.galleryGroup = g;
+    return { focus: V(0, 1.3, -0.6), view: V(0, 0.25, 1), dist: 3.2, solid: true };
   },
 
   pool(g) {
-    const x = 1.4, z = 1.0;
     const wood = M('woodDark'), rail = M('wood');
-    box(g, 2.24, 0.2, 1.24, wood, x, 0.7, z);
-    box(g, 2.04, 0.03, 1.04, M('felt'), x, 0.815, z);
+    box(g, 2.24, 0.2, 1.24, wood, 0, 0.7, 0);
+    box(g, 2.04, 0.03, 1.04, M('felt'), 0, 0.815, 0);
     for (const s of [-1, 1]) {
-      box(g, 2.24, 0.06, 0.1, rail, x, 0.83, z + s * 0.57);
-      box(g, 0.1, 0.06, 1.24, rail, x + s * 1.07, 0.83, z);
+      box(g, 2.24, 0.06, 0.1, rail, 0, 0.83, s * 0.57);
+      box(g, 0.1, 0.06, 1.24, rail, s * 1.07, 0.83, 0);
     }
-    for (const dx of [-1.0, 0, 1.0]) for (const s of [-1, 1]) cyl(g, 0.045, 0.045, 0.02, M('black'), x + dx, 0.84, z + s * 0.5, 8);
-    for (const dx of [-0.95, 0.95]) for (const s of [-1, 1]) box(g, 0.14, 0.6, 0.14, wood, x + dx, 0.3, z + s * 0.48);
+    for (const dx of [-1.0, 0, 1.0]) for (const s of [-1, 1]) cyl(g, 0.045, 0.045, 0.02, M('black'), dx, 0.84, s * 0.5, 8);
+    for (const dx of [-0.95, 0.95]) for (const s of [-1, 1]) box(g, 0.14, 0.6, 0.14, wood, dx, 0.3, s * 0.48);
     const balls = ['white', 'redLight', 'gold', 'blue', 'ink', 'sage', 'amber', 'red'];
     balls.forEach((c, i) => {
       const b = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), M(c, { roughness: 0.3 }));
       const row = i === 0 ? 0 : Math.floor((i - 1) / 2) + 1;
-      b.position.set(i === 0 ? x - 0.55 : x + 0.25 + row * 0.055, 0.86, z + (i === 0 ? 0 : ((i - 1) % 2) * 0.065 - 0.03 + (row % 2) * 0.03));
+      b.position.set(i === 0 ? -0.55 : 0.25 + row * 0.055, 0.86, i === 0 ? 0 : ((i - 1) % 2) * 0.065 - 0.03 + (row % 2) * 0.03);
       b.castShadow = true;
       g.add(b);
     });
-    const cue = box(g, 1.4, 0.022, 0.022, M('amberMid'), x - 0.2, 0.86, z - 0.42);
+    const cue = box(g, 1.4, 0.022, 0.022, M('amberMid'), -0.2, 0.86, -0.42);
     cue.rotation.y = 0.12;
-    return { focus: V(x, 0.82, z), view: V(0.25, 1, 0.85), dist: 2.9, colliders: [[x - 1.15, z - 0.65, x + 1.15, z + 0.65]] };
+    const shade = box(g, 1.1, 0.12, 0.3, M('sage'), 0, 2.2, 0);
+    shade.castShadow = false;
+    box(g, 0.012, ROOM.h - 2.26, 0.012, M('ink'), 0, (ROOM.h + 2.26) / 2, 0);
+    light(g, 'lampGlow', 2.4, 3.2, 0, 2.05, 0, 1.8);
+    return { focus: V(0, 0.82, 0), view: V(0.25, 1, 0.85), dist: 3.0, solid: true };
   },
 
   aquarium(g) {
-    const x = -2.6, z = 2.7;
-    box(g, 1.24, 0.7, 0.46, M('woodDark'), x, 0.35, z);
-    box(g, 1.26, 0.04, 0.48, M('woodLight'), x, 0.72, z);
+    box(g, 1.24, 0.7, 0.46, M('woodDark'), 0, 0.35, 0);
+    box(g, 1.26, 0.04, 0.48, M('woodLight'), 0, 0.72, 0);
     const water = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, 0.38), new THREE.MeshStandardMaterial({
       color: col('blue'), emissive: col('navy'), emissiveIntensity: 0.9, transparent: true, opacity: 0.55, roughness: 0.2, depthWrite: false,
     }));
-    water.position.set(x, 0.99, z);
+    water.position.set(0, 0.99, 0);
     g.add(water);
-    box(g, 1.12, 0.06, 0.4, M('amberDark'), x, 0.77, z);
-    box(g, 1.16, 0.03, 0.42, M('ink'), x, 1.255, z); // lid
-    for (const dx of [-0.56, 0.56]) box(g, 0.03, 0.56, 0.42, M('ash'), x + dx, 0.99, z);
-    for (const dx of [-0.35, -0.3, 0.38]) { const w = box(g, 0.02, 0.22 + Math.abs(dx) * 0.2, 0.02, M('sage'), x + dx, 0.9, z + 0.05); w.castShadow = false; }
+    box(g, 1.12, 0.06, 0.4, M('amberDark'), 0, 0.77, 0);
+    box(g, 1.16, 0.03, 0.42, M('ink'), 0, 1.255, 0);
+    for (const dx of [-0.56, 0.56]) box(g, 0.03, 0.56, 0.42, M('ash'), dx, 0.99, 0);
+    for (const dx of [-0.35, -0.3, 0.38]) { const w = box(g, 0.02, 0.22 + Math.abs(dx) * 0.2, 0.02, M('sage'), dx, 0.9, -0.05); w.castShadow = false; }
     const fish = [];
     for (let i = 0; i < 5; i++) {
       const f = new THREE.Group();
       const c = i % 2 ? 'gold' : 'amber';
       box(f, 0.06, 0.03, 0.015, glow(c, 0.5), 0, 0, 0);
       box(f, 0.02, 0.03, 0.01, glow('redLight', 0.4), -0.04, 0, 0);
-      f.position.set(x, 0.95, z);
       g.add(f);
-      fish.push({ f, speed: 0.25 + i * 0.07, phase: i * 1.7, y: 0.86 + i * 0.07, z: z - 0.1 + (i % 3) * 0.1 });
+      fish.push({ f, speed: 0.25 + i * 0.07, phase: i * 1.7, y: 0.86 + i * 0.07, z: 0.1 - (i % 3) * 0.1 });
     }
-    light(g, 'blue', 1.2, 2.2, x, 1.1, z - 0.5, 1.8);
+    light(g, 'blue', 1.4, 2.4, 0, 1.1, 0.5, 1.8);
     return {
-      focus: V(x, 0.98, z), view: V(0.1, 0.25, -1), dist: 1.7, colliders: [[x - 0.64, z - 0.26, x + 0.64, z + 0.3]],
+      focus: V(0, 0.98, 0), view: V(0.1, 0.25, 1), dist: 1.8, solid: true,
       update: (dt, t) => {
         for (const o of fish) {
           const s = Math.sin(t * o.speed + o.phase);
-          o.f.position.set(x + s * 0.45, o.y + Math.sin(t * 1.3 + o.phase) * 0.02, o.z);
+          o.f.position.set(s * 0.45, o.y + Math.sin(t * 1.3 + o.phase) * 0.02, o.z);
           o.f.rotation.y = Math.cos(t * o.speed + o.phase) > 0 ? 0 : Math.PI;
         }
       },
@@ -393,22 +498,22 @@ const BUILDERS = {
   },
 
   chandelier(g) {
-    const x = -1.9, z = 0.9, y = 2.35;
+    const y = 2.65;
     const gold = M('gold', { roughness: 0.4 });
-    box(g, 0.02, ROOM.h - y - 0.1, 0.02, gold, x, (ROOM.h + y + 0.1) / 2, z);
-    cyl(g, 0.06, 0.1, 0.18, gold, x, y, z, 8);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.02, 4, 16), gold);
+    box(g, 0.02, ROOM.h - y - 0.1, 0.02, gold, 0, (ROOM.h + y + 0.1) / 2, 0);
+    cyl(g, 0.06, 0.1, 0.18, gold, 0, y, 0, 8);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.02, 4, 16), gold);
     ring.rotation.x = Math.PI / 2;
-    ring.position.set(x, y - 0.04, z);
+    ring.position.set(0, y - 0.04, 0);
     g.add(ring);
-    const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.018, 4, 12), M('amber'));
+    const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.018, 4, 12), M('amber'));
     ring2.rotation.x = Math.PI / 2;
-    ring2.position.set(x, y - 0.14, z);
+    ring2.position.set(0, y - 0.14, 0);
     g.add(ring2);
     const flames = [];
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      const cx = x + Math.sin(a) * 0.45, cz = z + Math.cos(a) * 0.45;
+      const cx = Math.sin(a) * 0.5, cz = Math.cos(a) * 0.5;
       cyl(g, 0.02, 0.02, 0.1, M('cream'), cx, y + 0.02, cz, 6);
       const f = box(g, 0.016, 0.035, 0.016, new THREE.MeshBasicMaterial({ color: col('lampGlow') }), cx, y + 0.09, cz);
       f.castShadow = false;
@@ -416,12 +521,12 @@ const BUILDERS = {
       const drop = box(g, 0.02, 0.06, 0.02, M('goldLight', { emissive: col('gold'), emissiveIntensity: 0.4 }), cx, y - 0.1, cz);
       drop.castShadow = false;
     }
-    const l = light(g, 'gold', 5, 7, x, y - 0.1, z, 1.6);
+    const l = light(g, 'gold', 6, 8, 0, y - 0.1, 0, 1.6);
     return {
-      focus: V(x, y, z), view: V(0.45, -0.35, 1), dist: 2.0, colliders: [], lit: true,
+      focus: V(0, y, 0), view: V(0.45, -0.35, 1), dist: 2.2,
       update: (dt, t) => {
         flames.forEach((f, i) => { f.scale.y = 0.8 + Math.sin(t * 13 + i * 2.1) * 0.25; });
-        l.intensity = 5 + Math.sin(t * 9) * 0.3 + Math.sin(t * 23) * 0.15;
+        l.intensity = 6 + Math.sin(t * 9) * 0.3 + Math.sin(t * 23) * 0.15;
       },
     };
   },
@@ -429,96 +534,223 @@ const BUILDERS = {
 
 // ---------------- people ----------------
 
-/** A standing customer: coat, hat, a glass in the right hand that comes up now and then. */
-function makePatron({ coat = 'navyLight', hat = 'ink', skin = 'skin', withCue = false } = {}) {
+/** Fallback standing customer if bar.glb is missing: coat, hat, posable right arm. */
+function makePatron({ coat = 'navyLight', hat = 'ink', skin = 'skin' } = {}) {
   const g = new THREE.Group();
-  g.name = 'Patron';
-  const coatM = M(coat), dark = M('ink'), skinM = M(skin);
-  for (const s of [-1, 1]) {
-    box(g, 0.13, 0.82, 0.14, M('ashDark'), s * 0.08, 0.41, 0);
-    box(g, 0.13, 0.05, 0.22, dark, s * 0.08, 0.025, 0.04);
-  }
+  const coatM = M(coat), skinM = M(skin);
+  for (const s of [-1, 1]) box(g, 0.13, 0.82, 0.14, M('ashDark'), s * 0.08, 0.41, 0);
   box(g, 0.38, 0.62, 0.22, coatM, 0, 1.12, 0);
-  box(g, 0.1, 0.3, 0.012, M('paper'), 0, 1.25, 0.112);
-  box(g, 0.04, 0.16, 0.014, M('red'), 0, 1.22, 0.118);
-  box(g, 0.09, 0.56, 0.1, coatM, -0.24, 1.1, 0); // left arm hanging
-  const arm = new THREE.Group(); // right arm: pivots at the shoulder
-  arm.position.set(0.24, 1.38, 0);
-  g.add(arm);
-  box(arm, 0.09, 0.32, 0.1, coatM, 0, -0.16, 0);
-  const fore = new THREE.Group();
-  fore.position.set(0, -0.3, 0);
-  arm.add(fore);
-  box(fore, 0.085, 0.085, 0.28, coatM, 0, 0, 0.12);
-  box(fore, 0.07, 0.07, 0.07, skinM, 0, 0, 0.28);
-  if (withCue) {
-    const cue = box(fore, 0.02, 0.02, 1.4, M('amberMid'), 0, -0.02, 0.4);
-    cue.rotation.x = 0.9;
-  } else {
-    const glass = makeGlass();
-    glass.position.set(0, 0.0, 0.29);
-    glass.scale.setScalar(0.9);
-    fore.add(glass);
-  }
-  const head = new THREE.Group();
-  head.name = 'Head';
-  head.position.set(0, 1.47, 0);
-  head.rotation.order = 'YXZ';
-  g.add(head);
-  box(head, 0.07, 0.06, 0.07, skinM, 0, 0, 0);
+  box(g, 0.09, 0.56, 0.1, coatM, 0.24, 1.1, 0);
+  const up = new THREE.Group(); up.name = 'UpperArmR'; up.position.set(-0.24, 1.4, 0); g.add(up);
+  box(up, 0.09, 0.3, 0.1, coatM, 0, -0.15, 0);
+  const fo = new THREE.Group(); fo.name = 'ForeArmR'; fo.position.set(0, -0.3, 0); up.add(fo);
+  box(fo, 0.085, 0.085, 0.3, coatM, 0, 0, 0.13);
+  const tip = new THREE.Object3D(); tip.name = 'HandTipR'; tip.position.set(0, 0, 0.32); fo.add(tip);
+  const head = new THREE.Group(); head.name = 'Head'; head.position.set(0, 1.47, 0); g.add(head);
   box(head, 0.18, 0.21, 0.19, skinM, 0, 0.12, 0);
-  box(head, 0.3, 0.02, 0.3, M(hat), 0, 0.22, 0); // brim
+  box(head, 0.3, 0.02, 0.3, M(hat), 0, 0.22, 0);
   box(head, 0.2, 0.1, 0.2, M(hat), 0, 0.28, 0);
-  box(head, 0.205, 0.025, 0.205, M('red'), 0, 0.245, 0);
-  return { root: g, head, arm, fore };
+  return g;
 }
 
-/** Somebody standing who glances at you and has a drink (or a shot on the pool table) now and then. */
-class Stander {
-  constructor(parts, { lift = 'drink' } = {}) {
-    Object.assign(this, parts);
-    this.lift = lift;
-    this.t = Math.random() * 5;
-    this.next = 3 + Math.random() * 5;
-    this.action = 0;
-    this.yaw = 0;
-    this.pitch = 0;
-    this.arm.rotation.x = 0.6;
-    this.fore.rotation.x = -0.9;
+/** A pint (from bar.glb) or a whiskey glass. */
+function makePint(models) {
+  return fromModel(models, 'Pint') ?? makeGlass();
+}
+
+/**
+ * Somebody standing at the bar: the seated characters' look-at and arm reach, plus a drink
+ * raised to the mouth every few seconds (or, holding a cue, just a glance now and then).
+ */
+class Regular {
+  constructor(root, { holds = 'pint', models, smoke }) {
+    this.root = root;
+    this.ch = new Character(root, 0, { smoke, id: 'regular' });
+    this.ch.nextIdle = 4 + Math.random() * 6;
+    this.holds = holds;
+    this.next = 2 + Math.random() * 6;
+    this.t = 0;
+    this.solved = null;
+    if (holds === 'pint' && this.ch.handTip) {
+      const pint = makePint(models);
+      pint.scale.setScalar(0.85);
+      pint.position.set(0, -0.06, -0.02);
+      this.ch.handTip.add(pint);
+    } else if (holds === 'cue' && this.ch.handTip) {
+      const cue = box(this.ch.handTip, 0.022, 0.022, 1.4, M('amberMid'), 0, 0, 0.3);
+      cue.rotation.x = 0.7;
+    }
   }
 
-  update(dt, eye) {
-    this.t += dt;
+  update(dt, time, eye) {
+    const ch = this.ch;
+    ch.lookAt(eye && eye.distanceTo(this.root.position) < 4 ? eye : null);
+    ch.update(dt, time);
+    if (this.holds !== 'pint' || !ch.armRest) return;
     this.next -= dt;
-    if (this.next <= 0) { this.next = 5 + Math.random() * 7; this.action = 2.4; }
-    let up = 0;
-    if (this.action > 0) {
-      this.action -= dt;
-      up = Math.sin(Math.min(1, (2.4 - this.action) / 2.4) * Math.PI);
+    if (this.next <= 0 && !this.solved) {
+      // bring the glass up to the mouth
+      this.root.updateMatrixWorld(true);
+      const head = ch.head.getWorldPosition(new THREE.Vector3());
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.root.quaternion);
+      const mouth = head.clone().addScaledVector(fwd, 0.16).add(V(0, 0.02, 0));
+      const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.root.quaternion);
+      this.solved = ch.solveArm(mouth, head.clone().addScaledVector(right, 0.5).add(V(0, -0.6, 0)));
+      this.t = 0;
     }
-    if (this.lift === 'drink') {
-      this.arm.rotation.x = -0.35 - up * 0.9;
-      this.fore.rotation.x = -0.9 - up * 0.9;
-    } else {
-      // a slow stroke of the cue
-      this.arm.rotation.x = -0.6 + Math.sin(this.t * 2) * 0.12 * up;
-      this.fore.rotation.x = -0.6;
+    if (this.solved) {
+      this.t += dt;
+      const k = Math.sin(Math.min(1, this.t / 2.6) * Math.PI);
+      ch.setArm(Math.min(1, k * 1.4), this.solved);
+      if (this.t >= 2.6) { this.solved = null; ch.setArm(0); this.next = 5 + Math.random() * 8; }
     }
-    // look at you when you're close, otherwise into the drink
-    let ty = 0, tp = up * -0.25;
-    if (eye) {
-      const local = this.root.worldToLocal(eye.clone());
-      const d = Math.hypot(local.x, local.z);
-      if (d < 3.5) {
-        ty = THREE.MathUtils.clamp(Math.atan2(local.x, local.z), -1.0, 1.0);
-        tp = THREE.MathUtils.clamp(-Math.atan2(local.y - 1.55, d), -0.4, 0.4);
+  }
+}
+
+/**
+ * The bartender: keeps an eye on you, drifts along the bar, and every so often pulls a pint
+ * at the tap, carries it down the bar and slides it across to someone (you, if you're standing
+ * at the counter).
+ */
+class Bartender {
+  constructor(scene, models, smoke) {
+    let root = fromModel(models, 'Bartender');
+    this.fallback = !root;
+    if (!root) {
+      const b = makeBartender();
+      b.tray.visible = false;
+      root = b.root;
+    }
+    root.position.set(-1.0, 0, BARTENDER_Z);
+    scene.scene.add(root);
+    this.root = root;
+    this.world = scene;
+    this.models = models;
+    this.ch = new Character(root, 0, { smoke, id: 'bartender' });
+    this.ch.nextIdle = Infinity; // no idle glances: he's watching you
+    this.x = -1.0;
+    this.goal = -1.0;
+    this.facing = 0;
+    this.wait = 2;
+    this.serveIn = 6;
+    this.job = null; // { step, t, ... }
+    this.pints = [];
+  }
+
+  get head() { return this.ch.head; }
+
+  _walk(dt, x) {
+    const d = x - this.x;
+    const step = THREE.MathUtils.clamp(d, -1.1 * dt, 1.1 * dt);
+    this.x += step;
+    this.walking = Math.abs(step) > 1e-4;
+    if (this.walking) this.wantFacing = step > 0 ? Math.PI / 2 : -Math.PI / 2;
+    return Math.abs(x - this.x) < 0.02;
+  }
+
+  _reach(target) {
+    this.root.updateMatrixWorld(true);
+    const sh = this.ch.upperArm.getWorldPosition(new THREE.Vector3());
+    return this.ch.solveArm(target, sh.clone().add(V(0, -0.5, 0)).addScaledVector(new THREE.Vector3(-1, 0, 0).applyQuaternion(this.root.quaternion), 0.4));
+  }
+
+  update(dt, time, player) {
+    const eye = player?.eye;
+    this.walking = false;
+    this.wantFacing = this.facing;
+    const j = this.job;
+    if (!j) {
+      // idle: wander a little, face the room (and you)
+      this.wait -= dt;
+      if (this.wait <= 0 && Math.abs(this.goal - this.x) < 0.02) {
+        this.goal = -4.8 + Math.random() * 5.6;
+        this.wait = 3 + Math.random() * 4;
+      }
+      if (!this._walk(dt, this.goal) || !this.walking) {
+        this.wantFacing = 0;
+        if (eye) this.wantFacing = THREE.MathUtils.clamp(Math.atan2(eye.x - this.x, eye.z - BARTENDER_Z), -1.0, 1.0);
+      }
+      this.serveIn -= dt;
+      if (this.serveIn <= 0 && this.ch.armRest) this._startServe(player);
+    } else this._serveStep(dt, j);
+    // turn smoothly; Character.update applies baseRotY
+    let d = this.wantFacing - this.facing;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    this.facing += d * (1 - Math.exp(-6 * dt));
+    this.ch.baseRotY = this.facing;
+    this.root.position.x = this.x;
+    this.ch.lookAt(eye && eye.distanceTo(this.root.position) < 9 ? eye : null);
+    this.ch.update(dt, time);
+    if (this.walking) this.root.position.y = Math.abs(Math.sin(time * 7)) * 0.018;
+    for (const p of this.pints) {
+      if (p.slide) {
+        p.slide.t = Math.min(1, p.slide.t + dt / 0.7);
+        p.obj.position.lerpVectors(p.slide.from, p.slide.to, 1 - (1 - p.slide.t) ** 3);
+        if (p.slide.t >= 1) p.slide = null;
       }
     }
-    const k = 1 - Math.exp(-4 * dt);
-    this.yaw += (ty - this.yaw) * k;
-    this.pitch += (tp - this.pitch) * k;
-    this.head.rotation.set(this.pitch, this.yaw, 0);
-    this.root.position.y = Math.sin(this.t * 1.5) * 0.004;
+  }
+
+  _startServe(player) {
+    const atCounter = player && player.z > COUNTER.zFront && player.z < COUNTER.zFront + 1.6
+      && player.x > COUNTER.x0 + 0.3 && player.x < COUNTER.x1 - 0.3;
+    const x = atCounter ? player.x : -4.75; // you, or the regular at the end of the bar
+    this.job = { step: 'toTap', t: 0, x: THREE.MathUtils.clamp(x, COUNTER.x0 + 0.4, COUNTER.x1 - 0.4), forYou: atCounter };
+  }
+
+  _serveStep(dt, j) {
+    const ch = this.ch;
+    j.t += dt;
+    switch (j.step) {
+      case 'toTap':
+        if (this._walk(dt, TAP.x)) { j.step = 'turnBack'; j.t = 0; }
+        break;
+      case 'turnBack':
+        this.wantFacing = Math.PI;
+        if (j.t > 0.5) { j.solved = this._reach(TAP.clone().add(V(0, 0.42, 0.12))); j.step = 'pull'; j.t = 0; }
+        break;
+      case 'pull': {
+        this.wantFacing = Math.PI;
+        const k = j.t < 0.6 ? j.t / 0.6 : j.t < 1.4 ? 1 : Math.max(0, 1 - (j.t - 1.4) / 0.5);
+        ch.setArm(k, j.solved);
+        if (j.t > 0.6 && !j.pint) {
+          j.pint = makePint(this.models);
+          ch.handTip.add(j.pint);
+          j.pint.position.set(0, -0.08, -0.02);
+          j.pint.scale.setScalar(0.85);
+        }
+        if (j.t > 1.9) { j.step = 'carry'; j.t = 0; }
+        break;
+      }
+      case 'carry':
+        if (this._walk(dt, j.x)) { j.step = 'turnFront'; j.t = 0; }
+        break;
+      case 'turnFront':
+        this.wantFacing = 0;
+        if (j.t > 0.45) { j.solved = this._reach(V(j.x, COUNTER.y + 0.1, COUNTER.z - 0.05)); j.step = 'place'; j.t = 0; }
+        break;
+      case 'place': {
+        this.wantFacing = 0;
+        const k = j.t < 0.6 ? j.t / 0.6 : Math.max(0, 1 - (j.t - 0.75) / 0.5);
+        ch.setArm(Math.min(1, k), j.solved);
+        if (j.t > 0.6 && j.pint) {
+          // let go: the pint stands on the counter and slides over to the customer
+          this.world.scene.attach(j.pint);
+          j.pint.rotation.set(0, 0, 0);
+          j.pint.position.set(j.x, COUNTER.y, COUNTER.z - 0.05);
+          const p = { obj: j.pint, slide: { t: 0, from: j.pint.position.clone(), to: V(j.x, COUNTER.y, COUNTER.zFront + 0.06) } };
+          this.pints.push(p);
+          if (this.pints.length > 4) { const old = this.pints.shift(); old.obj.removeFromParent(); }
+          j.pint = null;
+          this.world.events.push({ who: 'bartender', text: j.forYou ? 'On the house, boss.' : 'There you go.' });
+        }
+        if (j.t > 1.3) { ch.setArm(0); this.job = null; this.serveIn = 12 + Math.random() * 10; }
+        break;
+      }
+      default:
+        this.job = null;
+    }
   }
 }
 
@@ -533,34 +765,52 @@ export class BarScene {
     const scene = new THREE.Scene();
     scene.name = 'BarScene';
     scene.background = new THREE.Color(0x000000);
-    scene.fog = new THREE.Fog(0x050407, 9, 16);
+    // the further you get from something, the darker it is
+    scene.fog = new THREE.Fog(0x050407, 2.8, 12.5);
     this.scene = scene;
+    this.models = models;
     this.colliders = []; // [x0, z0, x1, z1]
     this.dynamic = []; // { pos: Vector3, r }
     this.items = {};
-    this.people = [];
+    this.regulars = [];
+    this.seated = [];
+    this.events = []; // things people say: { who, text }
     this.time = 0;
 
-    const hemi = new THREE.HemisphereLight(0x8a6448, 0x120c0a, 1.0);
-    this.hemi = hemi;
-    hemi.name = 'Ambient';
-    scene.add(hemi);
+    this.hemi = new THREE.HemisphereLight(0x8a6448, 0x120c0a, 0.9);
+    this.hemi.name = 'Ambient';
+    scene.add(this.hemi);
+    this.smoke = new Smoke(scene, 50);
     this._buildRoom();
     this._buildCounter();
-    this._buildTable();
-    this._buildPeople(models);
+    this._buildTables();
 
+    const ctx = { models, scene: this };
     for (const id of Object.keys(BUILDERS)) {
       const g = new THREE.Group();
       g.name = `Item_${id}`;
-      g.visible = false;
+      const L = LAYOUT[id];
+      g.position.set(L.pos[0], 0, L.pos[1]);
+      g.rotation.y = L.rot;
       scene.add(g);
-      const info = BUILDERS[id](g);
-      const mats = new Set();
-      g.traverse((o) => { if (o.isMesh) mats.add(o.material); });
-      for (const m of mats) m.userData.base = { emissive: m.emissive?.clone(), intensity: m.emissiveIntensity ?? 0 };
-      this.items[id] = { id, group: g, mats: [...mats], ...info };
+      const info = BUILDERS[id](g, ctx);
+      g.updateMatrixWorld(true);
+      const focus = g.localToWorld(info.focus.clone());
+      const view = info.view.clone().applyQuaternion(g.quaternion);
+      let colliders = [];
+      if (info.solid) {
+        const b = new THREE.Box3().setFromObject(g);
+        colliders = [[b.min.x, b.min.z, b.max.x, b.max.z]];
+      } else if (info.colliders) {
+        colliders = info.colliders.map(([x0, z0, x1, z1]) => {
+          const a = g.localToWorld(V(x0, 0, z0)), c = g.localToWorld(V(x1, 0, z1));
+          return [Math.min(a.x, c.x), Math.min(a.z, c.z), Math.max(a.x, c.x), Math.max(a.z, c.z)];
+        });
+      }
+      g.visible = false;
+      this.items[id] = { id, group: g, ...info, focus, view, colliders };
     }
+    this._buildPeople(models);
   }
 
   _buildRoom() {
@@ -576,7 +826,7 @@ export class BarScene {
     this.ceiling.position.y = h;
     this.ceiling.name = 'Ceiling';
     s.add(this.ceiling);
-    for (let x = x0 + 1; x < x1; x += 2) box(this.ceiling, 0.14, D, 0.12, M('woodDark'), x, 0, 0.06); // beams
+    for (let x = x0 + 1; x < x1; x += 2) box(this.ceiling, 0.16, D, 0.14, M('woodDark'), x, 0, 0.07); // beams
 
     const wallTex = panelTexture(3);
     const lowTex = panelTexture(4, COLORS.woodMid, COLORS.ink, COLORS.woodDark);
@@ -604,36 +854,41 @@ export class BarScene {
       right: wall('RightWall', D, -Math.PI / 2, x1 + 0.05, 0),
     };
 
-    // the street door (front wall) and the door to the back room (left wall)
     const door = (parent, x, glowStrip) => {
       box(parent, 1.12, 2.22, 0.06, M('woodDark'), x, 1.11, 0.08);
       box(parent, 0.98, 2.1, 0.06, M('wood'), x, 1.05, 0.11);
       for (const y of [0.55, 1.5]) box(parent, 0.7, 0.6, 0.02, M('woodMid'), x, y, 0.15);
       cyl(parent, 0.03, 0.03, 0.05, M('gold'), x + 0.38, 1.0, 0.16, 6).rotation.x = Math.PI / 2;
-      if (glowStrip) {
-        const strip = box(parent, 0.96, 0.02, 0.02, glow('amber', 1.4), x, 0.01, 0.16);
-        strip.castShadow = false;
-      }
+      if (glowStrip) box(parent, 0.96, 0.02, 0.02, glow('amber', 1.4), x, 0.01, 0.16).castShadow = false;
     };
     door(this.walls.front, 0, false);
-    box(this.walls.front, 0.5, 0.35, 0.03, M('ink'), 0, 2.45, 0.1); // a little "open" board over it
+    // windows either side of the street door: night outside
+    for (const x of [-2.2, 2.2]) {
+      box(this.walls.front, 1.3, 1.1, 0.04, M('woodDark'), x, 1.7, 0.08);
+      box(this.walls.front, 1.18, 0.98, 0.03, glow('navy', 0.35), x, 1.7, 0.1).castShadow = false;
+      box(this.walls.front, 0.04, 0.98, 0.04, M('woodDark'), x, 1.7, 0.12);
+    }
     door(this.walls.left, -BACK_DOOR.z, true); // the left wall's local x runs along world -z
-    this.doorLight = light(s, 'amber', 0.9, 2.2, BACK_DOOR.x + 0.4, 0.25, BACK_DOOR.z, 2);
-    const plate = box(this.walls.left, 0.36, 0.1, 0.02, M('gold'), -BACK_DOOR.z, 2.32, 0.12);
-    plate.castShadow = false;
+    light(s, 'amber', 1.0, 2.4, BACK_DOOR.x + 0.4, 0.25, BACK_DOOR.z, 2);
+    box(this.walls.left, 0.36, 0.1, 0.02, M('gold'), -BACK_DOOR.z, 2.32, 0.12).castShadow = false;
 
-    // the one bare bulb you start with
-    const bx = -0.6, bz = -0.3;
-    box(s, 0.012, 0.5, 0.012, M('ink'), bx, h - 0.25, bz);
-    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), glow('lampGlow', 2.5));
-    bulb.position.set(bx, h - 0.55, bz);
-    s.add(bulb);
-    this.bulb = light(s, 'lampGlow', 14, 12, bx, h - 0.62, bz, 1.5);
-    this.bulb.castShadow = true;
-    this.bulb.shadow.mapSize.set(256, 256);
-    this.bulb.shadow.bias = -0.004;
-    this.bulb.shadow.camera.near = 0.1;
-    this.bulb.shadow.camera.far = 9;
+    // two bare bulbs are all you start with
+    this.bulbs = [];
+    for (const [bx, bz, shadow] of [[-2, -1.4, true], [2.4, 1.6, false]]) {
+      box(s, 0.012, 0.55, 0.012, M('ink'), bx, h - 0.275, bz);
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), glow('lampGlow', 2.5));
+      bulb.position.set(bx, h - 0.6, bz);
+      s.add(bulb);
+      const l = light(s, 'lampGlow', 16, 13, bx, h - 0.67, bz, 1.5);
+      if (shadow) {
+        l.castShadow = true;
+        l.shadow.mapSize.set(256, 256);
+        l.shadow.bias = -0.004;
+        l.shadow.camera.near = 0.1;
+        l.shadow.camera.far = 11;
+      }
+      this.bulbs.push(l);
+    }
   }
 
   _buildCounter() {
@@ -641,36 +896,37 @@ export class BarScene {
     const g = new THREE.Group();
     g.name = 'Counter';
     s.add(g);
-    // front counter: x -2.85..1.45, open at the right end so you can walk behind it
-    const cx = -0.7, cw = 4.3, cz = -1.62;
+    const cx = (COUNTER.x0 + COUNTER.x1) / 2, cw = COUNTER.x1 - COUNTER.x0, cz = COUNTER.z;
     const t = panelTexture(8, COLORS.woodDark, COLORS.ink, COLORS.wood); t.repeat.set(cw / 0.5, 2);
     box(g, cw, 1.0, 0.5, new THREE.MeshStandardMaterial({ map: t, roughness: 0.85 }), cx, 0.5, cz);
     box(g, cw + 0.1, 0.06, 0.66, M('wood', { roughness: 0.5 }), cx, 1.03, cz + 0.04);
     box(g, cw + 0.12, 0.02, 0.68, M('amberDark'), cx, 1.065, cz + 0.04).castShadow = false;
-    box(g, 0.5, 1.06, 0.66, M('woodDark'), cx + cw / 2 - 0.05, 0.53, cz + 0.04); // end cap
+    box(g, 0.5, 1.06, 0.66, M('woodDark'), COUNTER.x1 - 0.05, 0.53, cz + 0.04); // end cap
     const rail = cyl(g, 0.025, 0.025, cw, M('gold', { roughness: 0.4 }), cx, 0.2, cz + 0.36, 6);
     rail.rotation.z = Math.PI / 2;
-    for (let x = cx - cw / 2 + 0.4; x < cx + cw / 2; x += 0.9) cyl(g, 0.02, 0.02, 0.2, M('gold'), x, 0.1, cz + 0.33, 5);
-    // things on the counter
-    const glassA = makeGlass(); glassA.position.set(-2.3, 1.075, -1.5); g.add(glassA);
-    const glassB = makeGlass(); glassB.position.set(-1.05, 1.075, -1.58); g.add(glassB);
-    const tray = makeAshtray(); tray.root.position.set(0.3, 1.075, -1.55); g.add(tray.root);
+    for (let x = COUNTER.x0 + 0.4; x < COUNTER.x1; x += 0.9) cyl(g, 0.02, 0.02, 0.2, M('gold'), x, 0.1, cz + 0.33, 5);
+    const glassA = makeGlass(); glassA.position.set(-3.3, COUNTER.y, cz + 0.12); g.add(glassA);
+    const tray = makeAshtray(); tray.root.position.set(0.3, COUNTER.y, cz + 0.15); g.add(tray.root);
     this.counterEmber = tray.ember;
-    cyl(g, 0.12, 0.12, 0.015, M('bone', { roughness: 0.4 }), -0.1, 1.08, -1.65, 10); // a tray of nuts
-    this.colliders.push([cx - cw / 2 - 0.05, cz - 0.3, cx + cw / 2 + 0.05, cz + 0.37]);
+    cyl(g, 0.12, 0.12, 0.015, M('bone', { roughness: 0.4 }), -1.0, COUNTER.y + 0.005, cz + 0.05, 10); // a tray of nuts
+    this.colliders.push([COUNTER.x0 - 0.05, cz - 0.3, COUNTER.x1 + 0.05, cz + 0.37]);
 
-    // back bar against the back wall: x -3.0..1.8
-    const bbx = -0.6, bbw = 4.8, bbz = -2.77;
+    // back bar against the back wall
+    const bbx0 = -6.0, bbx1 = 2.2, bbx = (bbx0 + bbx1) / 2, bbw = bbx1 - bbx0, bbz = -4.77;
     const t2 = panelTexture(9, COLORS.woodMid, COLORS.ink, COLORS.woodDark); t2.repeat.set(bbw / 0.5, 2);
     box(g, bbw, 0.92, 0.44, new THREE.MeshStandardMaterial({ map: t2, roughness: 0.85 }), bbx, 0.46, bbz);
     box(g, bbw + 0.04, 0.05, 0.48, M('wood'), bbx, 0.945, bbz);
-    for (let x = bbx - bbw / 2 + 0.3; x < bbx + bbw / 2 - 1.4; x += 0.28) {
+    for (let x = bbx0 + 0.9; x < 0.6; x += 0.28) {
+      if (Math.abs(x - TAP.x) < 0.45) continue;
       const c = ['amber', 'sage', 'redLight', 'cream'][Math.floor(Math.abs(x * 7)) % 4];
-      cyl(g, 0.03, 0.035, 0.22, M(c, { roughness: 0.3 }), x, 1.08, bbz - 0.08, 7); // a few bottles even without the shelf
+      cyl(g, 0.03, 0.035, 0.22, M(c, { roughness: 0.3 }), x, 1.08, bbz - 0.08, 7);
     }
-    box(g, 0.5, 0.3, 0.32, M('ash', { roughness: 0.5 }), -2.5, 1.12, bbz); // the till
-    box(g, 0.42, 0.1, 0.05, M('ink'), -2.5, 1.2, bbz + 0.17);
-    this.colliders.push([bbx - bbw / 2 - 0.05, ROOM.z0, bbx + bbw / 2 + 0.05, bbz + 0.25]);
+    box(g, 0.5, 0.3, 0.32, M('ash', { roughness: 0.5 }), bbx0 + 0.45, 1.12, bbz); // the till
+    box(g, 0.42, 0.1, 0.05, M('ink'), bbx0 + 0.45, 1.2, bbz + 0.17);
+    const tap = fromModel(this.models, 'BeerTap');
+    if (tap) { tap.position.copy(TAP); g.add(tap); }
+    else box(g, 0.5, 0.4, 0.08, M('gold'), TAP.x, TAP.y + 0.2, TAP.z);
+    this.colliders.push([bbx0 - 0.05, ROOM.z0, bbx1 + 0.05, bbz + 0.25]);
 
     // the catalog: an open book on the back bar under a green desk lamp
     const book = new THREE.Group();
@@ -685,51 +941,50 @@ export class BarScene {
     pages.position.y = 0.035;
     pages.castShadow = true;
     book.add(pages);
-    const ribbon = box(book, 0.02, 0.004, 0.12, M('gold'), 0.02, 0.052, 0.18);
-    ribbon.castShadow = false;
-    this.bookMesh = book;
+    box(book, 0.02, 0.004, 0.12, M('gold'), 0.02, 0.052, 0.18).castShadow = false;
     const lampX = BOOK.x + 0.42, lampZ = BOOK.z - 0.05;
     cyl(g, 0.08, 0.09, 0.03, M('gold'), lampX, 0.985, lampZ, 8);
     cyl(g, 0.012, 0.012, 0.32, M('gold'), lampX, 1.15, lampZ, 5);
     const shade = box(g, 0.3, 0.07, 0.12, glow('sage', 0.25), lampX - 0.08, 1.32, lampZ);
     shade.rotation.z = 0.25;
-    this.bookLight = light(g, 'lampGlow', 1.6, 1.8, BOOK.x + 0.1, 1.3, BOOK.z + 0.05, 2);
+    light(g, 'lampGlow', 1.8, 2.0, BOOK.x + 0.1, 1.3, BOOK.z + 0.05, 2);
   }
 
-  _buildTable() {
-    const g = new THREE.Group();
-    g.name = 'RoundTable';
-    g.position.set(-1.9, 0, 0.9);
-    this.scene.add(g);
-    const wood = M('woodDark');
-    cyl(g, 0.5, 0.5, 0.05, M('wood'), 0, 0.74, 0, 16);
-    cyl(g, 0.06, 0.08, 0.7, wood, 0, 0.36, 0, 8);
-    cyl(g, 0.3, 0.32, 0.04, wood, 0, 0.02, 0, 12);
-    const gl = makeGlass(); gl.position.set(0.15, 0.765, -0.1); g.add(gl);
-    const gl2 = makeGlass(); gl2.position.set(-0.2, 0.765, 0.05); g.add(gl2);
-    const cards = box(g, 0.065, 0.012, 0.09, M('cream'), 0.05, 0.775, 0.18);
-    cards.rotation.y = 0.4;
-    this.colliders.push([-1.9 - 0.55, 0.9 - 0.55, -1.9 + 0.55, 0.9 + 0.55]);
+  _buildTables() {
+    this.tables = [V(-4.4, 0, 0.6), V(-1.6, 0, 0.7)];
+    this.tables.forEach((T, i) => {
+      const g = new THREE.Group();
+      g.name = `RoundTable${i}`;
+      g.position.copy(T);
+      this.scene.add(g);
+      const wood = M('woodDark');
+      cyl(g, 0.5, 0.5, 0.05, M('wood'), 0, 0.74, 0, 16);
+      cyl(g, 0.06, 0.08, 0.7, wood, 0, 0.36, 0, 8);
+      cyl(g, 0.3, 0.32, 0.04, wood, 0, 0.02, 0, 12);
+      const gl = makeGlass(); gl.position.set(0.15, 0.765, -0.1); g.add(gl);
+      if (i === 0) { const gl2 = makeGlass(); gl2.position.set(-0.2, 0.765, 0.05); g.add(gl2); }
+      const cards = box(g, 0.065, 0.012, 0.09, M('cream'), 0.05, 0.775, 0.18);
+      cards.rotation.y = 0.4;
+      // a candle in a jar on each table: a little pool of light
+      cyl(g, 0.03, 0.03, 0.06, glow('amberDark', 0.4), -0.1, 0.795, -0.15, 6);
+      light(g, 'amber', 1.0, 2.2, -0.1, 0.95, -0.15, 2);
+      this.colliders.push([T.x - 0.55, T.z - 0.55, T.x + 0.55, T.z + 0.55]);
+    });
   }
 
   _buildPeople(models) {
     const s = this.scene;
-    this.smoke = new Smoke(s, 40);
-    // the bartender, behind the counter
-    const bt = makeBartender();
-    bt.root.position.set(-1.0, 0, -2.2);
-    bt.tray.visible = false; // working the bar tonight, not carrying drinks
-    s.add(bt.root);
-    this.bartender = { ...bt, x: -1.0, goal: -1.0, wait: 2, yaw: 0, pos: bt.root.position };
-    this.dynamic.push({ pos: bt.root.position, r: 0.3 });
+    this.bartender = new Bartender(this, models, this.smoke);
+    this.dynamic.push({ pos: this.bartender.root.position, r: 0.3 });
 
-    // two regulars at the round table (the back-room mob, off duty), in better light
+    // regulars from the back room, off duty, at the round tables
     const seats = [
-      { model: 'enforcer', id: 'enforcer', a: Math.PI * 0.75 },
-      { model: 'shark', id: 'shark', a: -Math.PI * 0.6 },
+      { model: 'enforcer', id: 'enforcer', t: 0, a: Math.PI * 0.75 },
+      { model: 'shark', id: 'shark', t: 0, a: -Math.PI * 0.6 },
+      { model: 'boss', id: 'boss', t: 1, a: Math.PI * 0.1 },
     ];
-    const T = { x: -1.9, z: 0.9 };
     for (const st of seats) {
+      const T = this.tables[st.t];
       const px = T.x + Math.sin(st.a) * 0.98, pz = T.z + Math.cos(st.a) * 0.98;
       const rot = Math.atan2(T.x - px, T.z - pz);
       if (models.chair) {
@@ -747,41 +1002,47 @@ export class BarScene {
       body.rotation.y = rot;
       body.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.8); } });
       s.add(body);
-      this.people.push({ kind: 'seated', ch: new Character(body, 0, { smoke: this.smoke, id: st.id }) });
+      this.seated.push(new Character(body, 0, { smoke: this.smoke, id: st.id }));
     }
 
-    // standing customers: one at the counter always, one at the darts and one at the pool table
-    // when you own them
-    const add = (opts, x, z, rotY, lift, needs) => {
-      const p = makePatron(opts);
-      p.root.position.set(x, 0, z);
-      p.root.rotation.y = rotY;
-      s.add(p.root);
-      const st = new Stander(p, { lift });
-      this.people.push({ kind: 'standing', st, needs, root: p.root, box: [x - 0.25, z - 0.25, x + 0.25, z + 0.25] });
+    // people standing around: one at the bar always, the others come with what you buy
+    const add = (name, fallback, x, z, rotY, holds, needs) => {
+      const root = fromModel(models, name) ?? makePatron(fallback);
+      root.name = name;
+      root.position.set(x, 0, z);
+      root.rotation.y = rotY;
+      s.add(root);
+      const r = new Regular(root, { holds, models, smoke: this.smoke });
+      r.needs = needs;
+      r.box = [x - 0.25, z - 0.25, x + 0.25, z + 0.25];
+      r.name = name;
+      this.regulars.push(r);
     };
-    add({ coat: 'navyLight', hat: 'ink' }, -2.85, -0.98, Math.PI + 0.35, 'drink', null);
-    add({ coat: 'leather', hat: 'woodDark', skin: 'skinLight' }, 2.75, -0.7, Math.PI / 2 - 0.2, 'drink', 'dartboard');
-    add({ coat: 'redMid', hat: 'ink', skin: 'skinMid', withCue: true }, 0.05, 1.75, Math.PI / 2 + 0.5, 'cue', 'pool');
+    add('PatronA', { coat: 'navyLight' }, -4.75, -1.98, Math.PI, 'pint', null);
+    add('PatronB', { coat: 'leather', hat: 'woodDark' }, 5.45, -2.45, Math.PI / 2, 'pint', 'dartboard');
+    add('PatronC', { coat: 'redMid', hat: 'ink' }, 2.85, 3.25, Math.atan2(1.4 - 2.85, 2.4 - 3.25), 'cue', 'pool');
+    add('Bookie', { coat: 'feltMid', hat: 'ink' }, HORSE_TABLE.pos.x, HORSE_TABLE.pos.z - 0.85, 0, 'pint', 'horses');
   }
 
   /** Show what you own. */
   setOwned(ids) {
     this.owned = new Set(ids);
     for (const it of Object.values(this.items)) it.group.visible = this.owned.has(it.id);
-    for (const p of this.people) if (p.kind === 'standing') p.root.visible = !p.needs || this.owned.has(p.needs);
+    for (const r of this.regulars) r.root.visible = !r.needs || this.owned.has(r.needs);
     this.preview = null;
+    if (this.previewBox) this.previewBox.visible = false;
+    if (this.previewLight) this.previewLight.intensity = 0;
   }
 
   /** Everything you can't walk through right now (furniture, owned items, people). */
   solidBoxes() {
     const out = this.colliders.slice();
     for (const it of Object.values(this.items)) if (this.owned?.has(it.id)) out.push(...it.colliders);
-    for (const p of this.people) if (p.kind === 'standing' && p.root.visible) out.push(p.box);
+    for (const r of this.regulars) if (r.root.visible) out.push(r.box);
     return out;
   }
 
-  /** Light up one item (bought or not) as a preview in the catalog; null for none. */
+  /** Show one item (bought or not) as a preview in the catalog; null for none. */
   setPreview(id) {
     if (this.preview === id) return;
     const old = this.preview && this.items[this.preview];
@@ -795,19 +1056,17 @@ export class BarScene {
       );
       this.previewBox.name = 'PreviewBox';
       this.scene.add(this.previewBox);
-    }
-    this.previewBox.visible = false;
-    if (!this.previewLight) {
-      this.previewLight = new THREE.PointLight(col('lampGlow'), 0, 3.5, 2);
+      this.previewLight = new THREE.PointLight(col('lampGlow'), 0, 4, 2);
       this.previewLight.name = 'PreviewLight';
       this.scene.add(this.previewLight);
     }
+    this.previewBox.visible = false;
     this.previewLight.intensity = 0;
     if (!it) return;
     it.group.visible = true;
     // a little light from where you're looking, so things in dark corners still read
-    this.previewLight.position.copy(it.view).normalize().multiplyScalar(Math.min(1, it.dist * 0.5)).add(it.focus);
-    this.previewLight.intensity = 2.2;
+    this.previewLight.position.copy(it.view).normalize().multiplyScalar(Math.min(1.2, it.dist * 0.5)).add(it.focus);
+    this.previewLight.intensity = 2.6;
     if (this.owned.has(it.id)) return;
     // a gold wire box around a thing you don't own yet: "this is what it would look like"
     const b = new THREE.Box3().setFromObject(it.group);
@@ -816,48 +1075,30 @@ export class BarScene {
     this.previewBox.visible = true;
   }
 
-  update(dt, eye) {
+  update(dt, player) {
     this.time += dt;
     const t = this.time;
+    const eye = player?.eye ?? null;
     for (const it of Object.values(this.items)) if (it.group.visible) it.update?.(dt, t);
-    // the preview's wire box blinks so you can tell it isn't yours yet
     if (this.previewBox?.visible) this.previewBox.material.color.set(Math.sin(t * 6) > -0.3 ? COLORS.gold : COLORS.amberDark);
-    this.bulb.intensity = 14 + Math.sin(t * 17) * 0.2 + (Math.random() < 0.004 ? -7 : 0);
+    this.bulbs[0].intensity = 16 + Math.sin(t * 17) * 0.2 + (Math.random() < 0.004 ? -8 : 0);
     this.counterEmber?.update(dt);
-    // the bartender drifts along the bar between jobs and keeps an eye on you
-    const b = this.bartender;
-    b.wait -= dt;
-    if (b.wait <= 0 && Math.abs(b.goal - b.x) < 0.01) {
-      b.goal = -2.2 + Math.random() * 2.6;
-      b.wait = 3 + Math.random() * 5;
+    this.bartender.update(dt, t, player);
+    for (const c of this.seated) {
+      c.lookAt(eye && eye.distanceTo(c.root.position) < 3.2 ? eye : null);
+      c.update(dt, t);
     }
-    const step = THREE.MathUtils.clamp(b.goal - b.x, -0.6 * dt, 0.6 * dt);
-    b.x += step;
-    b.root.position.x = b.x;
-    b.root.position.y = Math.abs(step) > 1e-4 ? Math.abs(Math.sin(t * 7)) * 0.015 : 0;
-    if (eye) {
-      const local = b.root.worldToLocal(eye.clone());
-      const ty = THREE.MathUtils.clamp(Math.atan2(local.x, local.z), -1.0, 1.0);
-      b.yaw += (ty - b.yaw) * (1 - Math.exp(-3 * dt));
-      b.head.rotation.y = b.yaw;
-    }
-    for (const p of this.people) {
-      if (p.kind === 'seated') {
-        p.ch.lookAt(eye && eye.distanceTo(p.ch.root.position) < 3.2 ? eye : null);
-        p.ch.update(dt, t);
-      } else if (p.root.visible) p.st.update(dt, eye);
-    }
+    for (const r of this.regulars) if (r.root.visible) r.update(dt, t, eye);
     this.smoke.update(dt);
   }
 
   /** World positions of everyone's heads (for speech bubbles). */
   heads() {
-    const out = [{ who: 'bartender', pos: this.bartender.head.getWorldPosition(new THREE.Vector3()) }];
-    this.people.forEach((p, i) => {
-      const h = p.kind === 'seated' ? p.ch.head : p.st.head;
-      if (p.kind === 'standing' && !p.root.visible) return;
-      if (h) out.push({ who: i, pos: h.getWorldPosition(new THREE.Vector3()) });
-    });
+    const out = [];
+    const add = (who, head) => { if (head) out.push({ who, pos: head.getWorldPosition(new THREE.Vector3()) }); };
+    add('bartender', this.bartender.head);
+    this.seated.forEach((c, i) => add(`seat${i}`, c.head));
+    for (const r of this.regulars) if (r.root.visible) add(r.name, r.ch.head);
     return out;
   }
 }

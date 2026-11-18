@@ -16,7 +16,7 @@ import { CAST } from './holdem/game/cast.js';
 import { playerView } from './holdem/engine/engine.js';
 import { decide } from './holdem/ai/decide.js';
 import { PERSONALITIES } from './holdem/ai/personalities.js';
-import { BarTycoon } from './bar/BarTycoon.js';
+import { BarTycoon, BAR_PIXEL_SIZE } from './bar/BarTycoon.js';
 
 const pr = new PixelRenderer({ targetHeight: 360 });
 const ui = new PixelUI(pr);
@@ -58,7 +58,7 @@ function firstPerson(model) {
 
 async function boot() {
   const models = await loadModels(
-    ['room', 'table', 'chair', 'lamp', 'boss', 'enforcer', 'shark', 'props', 'firstperson'],
+    ['room', 'table', 'chair', 'lamp', 'boss', 'enforcer', 'shark', 'props', 'firstperson', 'bar'],
     (p) => { loadProgress = p; },
   );
   const props = buildFallbackProps(models.props);
@@ -67,7 +67,10 @@ async function boot() {
   const chips = new ChipManager({ scene, templates: props.chips, tweens });
   const cards = new CardManager({ scene, template: props.card, tweens });
   controller = new HoldemController({ room, chips, cards, hud: null, tweens, look, camera, ui, pr, fp: firstPerson(models.firstperson) });
-  controller.bar = new BarTycoon({ ui, pr, models, onBuy: (it) => controller.buy(it), onNextDay: () => controller.nextDay() });
+  controller.bar = new BarTycoon({
+    ui, pr, models, onBuy: (it) => controller.buy(it), onNextDay: () => controller.nextDay(),
+    onMoney: () => controller._saveForTomorrow(),
+  });
   hud = new HUD({ ui, camera, controller });
   controller.hud = hud;
   const button = props.dealerButton.clone(true);
@@ -147,6 +150,7 @@ function frame(now) {
   }
   ui.end();
   const bar = controller?.bar?.active ? controller.bar.view : null;
+  pr.setPixelSize(bar ? BAR_PIXEL_SIZE : 1);
   pr.render(bar?.scene ?? scene, bar?.camera ?? camera);
   requestAnimationFrame(frame);
 }

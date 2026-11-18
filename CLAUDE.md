@@ -48,12 +48,16 @@ src/
                          HUD (all on-screen UI), SideEvents (drink / roulette / cigar),
                          Overview (cash-out screen), meta.js (pure rules: mood, roulette payouts,
                          hidden luck, bar catalog, save/load), cast.js (names, lines)
-  bar/                   your bar between nights, a separate 3D scene you walk around in:
-                         BarScene.js (room, counter, bartender, customers, every catalog item as a
-                         3D group hidden until bought, colliders), BarTycoon.js (WASD + pointer-lock
-                         walking, E to use the catalog / back-room door, the catalog book with a
-                         top view that zooms to the hovered item and previews it). main.js renders
-                         bar.view instead of the back room while bar.active.
+  bar/                   your bar between nights, a separate 3D scene you walk around in (14 x 10 m):
+                         BarScene.js (room, counter, the bartender's serve routine, regulars, every
+                         catalog item as a 3D group hidden until bought, colliders; people and the
+                         minigame models come from bar.glb), BarTycoon.js (WASD + pointer-lock
+                         walking, E to use the catalog / door / horse table / gallery, the catalog
+                         top view that zooms to the hovered item, the betting slip and race camera,
+                         the gallery HUD), horseRace.js (pure rules: Turtle/Myrtle/Yertle/Lurtle,
+                         runRace, settleBet, parseBet), ShootingGallery.js (ducks, cans, the
+                         revolver from firstperson.glb). main.js renders bar.view instead of the
+                         back room while bar.active, with pr.setPixelSize(2) for chunkier pixels.
 tests/                   Vitest
 tools/blender/           Python scripts that build every model in public/models (see README)
 public/models/           exported .glb files
@@ -81,7 +85,8 @@ never show the player that it exists.
   (`_checkSync`); if you change money outside the engine (e.g. roulette), update both.
 - Controls: 1 fold, 2 check/call, 3 raise, 4 all in, 5 cash out, E peek at cards, V top view,
   Q puff cigar. Buttons show their number badge bottom-left. In the bar: WASD walk, click for
-  mouse look, E use (catalog / back-room door). Keep README controls in sync.
+  mouse look, E use (catalog / back-room door / horse table / gallery), R reload in the gallery.
+  Keep README controls in sync. The horses' names are always drawn in orange (COLORS.amber).
 - New sounds: call `sound.play('name')` at the moment; list the name in Sound.js.
 
 ## Testing in the browser
@@ -102,7 +107,8 @@ glassDown, gulp, gunDrop, gunGrab, gunThrow, gunshot, knock, potSlide, puff, sli
 ## Models
 
 Built in Blender from `tools/blender/*.py` (the Blender MCP is installed on this PC). Export to
-`public/models/<name>.glb`. Characters are one body mesh plus a `Head` node and a posable right arm
+`public/models/<name>.glb`. `bar.py` builds all of bar.glb (people, horse table, horses, crown, gallery,
+duck with a transparent cut-out texture, can, pint, beer tap). Characters are one body mesh plus a `Head` node and a posable right arm
 (`UpperArmR` pivots at the shoulder, `ForeArmR` at the elbow, empty `HandTipR` marks the hand's
 end); there are no rigs. `Character.solveArm()` in BackRoom.js reaches that hand to a point.
 The arms are measured for where the game seats them (`SEAT_DIST` in characters.py must match

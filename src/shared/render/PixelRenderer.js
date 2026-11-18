@@ -26,6 +26,7 @@ uniform float tintAmount;
 uniform vec2 resolution;
 uniform float drunk;     // 0..1: wobble + double vision on the scene (not the UI)
 uniform float haze;      // 0..1: smoky warm haze over the scene
+uniform float pixelSize; // scene pixels are this many UI pixels wide (chunkier look)
 varying vec2 vUv;
 
 float hash(vec2 p) {
@@ -59,12 +60,13 @@ void main() {
   // film look: vignette and animated grain (dark corners, crawling noise)
   vec2 d = (vUv - 0.5) * vec2(resolution.x / resolution.y, 1.0);
   c *= 1.0 - vignette * dot(d, d) * 1.6;
-  c += (hash(gl_FragCoord.xy + floor(time * 24.0) * 17.0) - 0.5) * grain;
+  vec2 px = floor(gl_FragCoord.xy / pixelSize);
+  c += (hash(px + floor(time * 24.0) * 17.0) - 0.5) * grain;
   c *= 1.0 - fade;
   c = mix(c, tint, tintAmount);
   vec3 outc = c;
   if (quantize > 0.5) {
-    c += (bayer4(gl_FragCoord.xy) - 0.5) * ditherAmount;
+    c += (bayer4(px) - 0.5) * ditherAmount;
     float bd = 1e9;
     for (int i = 0; i < ${n}; i++) {
       vec3 d = c - palette[i];
@@ -125,6 +127,7 @@ export class PixelRenderer {
         resolution: { value: new THREE.Vector2(1, 1) },
         drunk: { value: 0 },
         haze: { value: 0 },
+        pixelSize: { value: 1 },
       },
       vertexShader: VERT,
       fragmentShader: FRAG(PALETTE.length),
@@ -139,6 +142,7 @@ export class PixelRenderer {
     this.width = 0;
     this.height = 0;
     this.scale = 1;
+    this.pixelSize = 1;
     this.onResize = null;
     window.addEventListener('resize', () => this.resize());
     this.resize();
@@ -158,7 +162,7 @@ export class PixelRenderer {
     this.renderer.setSize(w, h, false);
     this.canvas.style.width = `${(w * scale) / dpr}px`;
     this.canvas.style.height = `${(h * scale) / dpr}px`;
-    this.sceneTarget.setSize(w, h);
+    this.sceneTarget.setSize(Math.ceil(w / this.pixelSize), Math.ceil(h / this.pixelSize));
     this.post.uniforms.resolution.value.set(w, h);
     this.uiCanvas.width = w;
     this.uiCanvas.height = h;
@@ -174,6 +178,14 @@ export class PixelRenderer {
       x: Math.floor(((clientX - r.left) / r.width) * this.width),
       y: Math.floor(((clientY - r.top) / r.height) * this.height),
     };
+  }
+
+  /** Render the 3D scene with chunkier pixels (n UI pixels per scene pixel); the UI stays sharp. */
+  setPixelSize(n) {
+    if (n === this.pixelSize) return;
+    this.pixelSize = n;
+    this.post.uniforms.pixelSize.value = n;
+    this.sceneTarget.setSize(Math.ceil(this.width / n), Math.ceil(this.height / n));
   }
 
   render(scene, camera) {

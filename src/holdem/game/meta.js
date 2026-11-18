@@ -103,7 +103,8 @@ export function moodLine(m) {
 
 // ---------------- your bar ----------------
 
-/** Things you can put in your bar. They're just yours: nothing in the bar earns money. */
+/** Things you can put in your bar. Nothing earns money by itself; the horse table and the shooting
+ * gallery are games you can play there. */
 export const BAR_ITEMS = [
   { id: 'stools', name: 'Bar stools', price: 60 },
   { id: 'plant', name: 'Potted palm', price: 80 },
@@ -114,7 +115,9 @@ export const BAR_ITEMS = [
   { id: 'neon', name: 'Neon sign', price: 300 },
   { id: 'portrait', name: 'Portrait of Don Sal', price: 400 },
   { id: 'jukebox', name: 'Jukebox', price: 500 },
+  { id: 'horses', name: 'Horse race table', price: 600 },
   { id: 'piano', name: 'Upright piano', price: 900 },
+  { id: 'gallery', name: 'Shooting gallery', price: 1000 },
   { id: 'pool', name: 'Pool table', price: 1200 },
   { id: 'aquarium', name: 'Fish tank', price: 1500 },
   { id: 'chandelier', name: 'Chandelier', price: 2500 },

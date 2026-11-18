@@ -62,18 +62,32 @@ they are. Then you go to **your bar**.
 Half of what you cash out goes into the bar fund, the other half is your stake for the next night.
 Whatever you don't spend in the bar comes back to the table with you, added to that stake.
 
-Your bar is a room you walk around in, with a bartender behind the counter and regulars at the
-tables. The catalog lies open on the back bar, behind the counter: open it and the camera rises to
-a view of the whole bar from above. Point at something in the book and the camera zooms to where it
-would go, with a preview of it in place (a gold box around it if you don't own it yet). Buy it from
-the book. Nothing in the bar makes money: it's just yours, and it stays between nights. The door
-in the left wall takes you back to the table for the next night.
+Your bar is a big dim room you walk around in, drawn with chunkier pixels than the back room;
+things fade into the dark the further away they are. The bartender watches you and now and then
+pulls a pint at the tap and slides it down the counter, to you if you're standing there. Regulars
+sit at the tables and stand at the bar.
+
+The catalog lies open on the back bar, behind the counter: open it and the camera rises to a view
+of the whole bar from above. Point at something in the book and the camera zooms to where it would
+go, with a preview of it in place (a gold box around it if you don't own it yet). Buy it from the
+book. Things you buy stay between nights. Walk through the door in the left wall and the screen
+fades straight into the next night at the table.
+
+Two things in the catalog are games:
+
+- **Horse race table:** four tin horses, **Turtle, Myrtle, Yertle and Lurtle**. Lou the bookie
+  takes your bet: pick a horse (click, or left/right), type any amount up to your bar fund, and
+  bet. The camera rides along the race and a crown floats over whoever is in front. Win and you get
+  your bet back doubled; lose and Lou keeps it.
+- **Shooting gallery:** the back room's revolver, six shots a cylinder, 30 seconds. Tin ducks ride
+  two rails and cans stand on a shelf. Click to shoot, **R** reloads (it also reloads itself when
+  empty), **Esc** leaves. Your best score is saved.
 
 - **W A S D** (or arrow keys) walk, **Shift** walks faster.
 - **Mouse:** click the screen to look around with the mouse (Esc lets go). Without that, push the
   pointer to the left/right edge to turn.
-- **E** (or click) uses what you're facing: the catalog, the back-room door. **E** / **Esc**
-  closes the catalog.
+- **E** (or click) uses what you're facing: the catalog, the back-room door, the horse table, the
+  shooting gallery. **E** / **Esc** closes the catalog.
 
 Progress is saved in the browser after each night, and **Continue** on the start menu picks it
 up. Going broke, or losing at roulette, ends the run and wipes the save.
@@ -105,7 +119,9 @@ src/
     game/            cast & lines, HUD, HoldemController, SideEvents (drink / roulette / cigar),
                      Overview (cash-out screen), meta (mood, payouts, hidden luck, saves)
   bar/               your bar between nights: BarScene (the 3D room, people, catalog items),
-                     BarTycoon (walking, the catalog book and its zooming top view)
+                     BarTycoon (walking, the catalog book and its zooming top view, the horse
+                     race and gallery screens), horseRace (pure race and betting rules),
+                     ShootingGallery (targets and the gun)
 tests/               Vitest unit tests
 tools/blender/       Python scripts that build every model in public/models
 public/models/       exported .glb assets
@@ -123,6 +139,9 @@ lib.export_glb([bpy.data.objects['Table']], 'table.glb')
 
 Characters take `WHO = 'boss' | 'enforcer' | 'shark'` before running `characters.py`.
 `firstperson.py` builds the revolver and your hands (exported together as `firstperson.glb`).
+`bar.py` builds everything for your bar into `bar.glb` (export `BAR_OBJECTS`): the bartender, the
+regulars and Lou the bookie (each with a `Head` and a posable right arm), the horse-race table, the
+four horses and the crown, the shooting gallery booth, ducks and cans, a pint and the beer tap.
 
 ## Testing hooks
 
