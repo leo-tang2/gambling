@@ -73,6 +73,9 @@ also what the save holds). Going broke or dying at roulette ends the run and cle
 (`localStorage['bargambling.run.v1']`). Drinks give hidden luck (`makeLuckyDeckFn` in meta.js):
 never show the player that it exists. Separately, one hand in ten (`LIVELY_CHANCE`) is dealt from
 the best of 12 shuffles by weakest starting hand at the table (`livelyDeck`), so more people play.
+Every other hand (no lively deal, no drink luck) one opponent is dealt a starting hand just a little
+better than yours: a small heads-up favourite (`rivalDeck`, `RIVAL_EDGE` = its win chance, 53-66%).
+Your own two cards still come from a fair shuffle; only the opponents' cards are picked. Hidden too.
 
 ## Conventions
 
@@ -128,5 +131,7 @@ execs the script and calls `lib.export_glb`.
 `ai/decide.js`: preflop it plays a starting-hand chart (`preflopScore` thresholds per personality in
 `personalities.js`); after the flop it measures equity against the hands each opponent could hold
 given their public betting this hand (`ai/range.js`, engine stats `preRaises/raises/streetRaises/vpip`),
-so it folds to real aggression and bluffs/semi-bluffs at a per-personality rate. A broke opponent
+so it folds to real aggression and bluffs/semi-bluffs at a per-personality rate. The table is
+daring on purpose: `curious` makes so-so hands limp or tag along cheaply, and facing an all-in or a
+huge bet a decent hand calls `callDown` of the time (`gamble` threshold preflop, a pair postflop). A broke opponent
 shoots himself (`_bustScene` in HoldemController); whoever wins a pot turns their cards up.

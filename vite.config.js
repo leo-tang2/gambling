@@ -20,5 +20,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.js'],
+    testTimeout: 30000, // the deck-dealing tests simulate thousands of hands
   },
 });

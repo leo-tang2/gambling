@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createGame, startHand } from '../src/holdem/engine/engine.js';
+import { seededRng } from '../src/holdem/engine/rng.js';
 import {
   mafiaMood, rouletteWinnings, ROULETTE_BONUS, rouletteFires, splitCashOut, humanHoleIndexes,
   makeLuckyDeckFn, preflopScore, nextEventGap, BAR_ITEMS, nextNight, newRun,
-  holeIndexes, livelyDeck, LIVELY_CHANCE,
+  holeIndexes, livelyDeck, LIVELY_CHANCE, rivalDeck, RIVAL_EDGE, headsUpEquity,
 } from '../src/holdem/game/meta.js';
 
 describe('next night', () => {
@@ -140,6 +141,60 @@ describe('hidden luck', () => {
       return total / 400;
     };
     expect(avgWeakest(0.09)).toBeGreaterThan(avgWeakest(0.1) + 1.5);
+  });
+
+  // best heads-up win chance any opponent has against the human, measured carefully
+  const rivalOdds = (g, rng) => Math.max(...g.players.slice(1).map((p) => headsUpEquity(p.hole, g.players[0].hole, rng, 1500)));
+
+  it('deals an opponent a starting hand that is a small favourite against the human\'s', () => {
+    const rng = seededRng(31);
+    let inWindow = 0, total = 0;
+    const n = 150;
+    for (let i = 0; i < n; i++) {
+      const g = createGame({ players: players() });
+      g.deckFn = rivalDeck;
+      startHand(g);
+      const odds = rivalOdds(g, rng);
+      total += odds;
+      if (odds >= RIVAL_EDGE[0] - 0.05 && odds <= RIVAL_EDGE[1] + 0.05) inWindow++;
+    }
+    // a slight edge, not a lock: the human still wins a good share
+    expect(inWindow / n).toBeGreaterThan(0.85);
+    expect(total / n).toBeGreaterThan(0.53);
+    expect(total / n).toBeLessThan(0.66);
+  });
+
+  it('leaves the human\'s own starting hands as good as a fair shuffle', () => {
+    const rng = seededRng(33);
+    const avg = (fn) => {
+      let total = 0;
+      for (let i = 0; i < 1500; i++) {
+        const g = createGame({ players: players(), rng });
+        g.deckFn = fn;
+        startHand(g);
+        total += preflopScore(...g.players[0].hole);
+      }
+      return total / 1500;
+    };
+    expect(Math.abs(avg(rivalDeck) - avg(null))).toBeLessThan(0.35);
+  });
+
+  it('uses the rival deal on a normal hand, but drink luck still helps the human', () => {
+    const rng = seededRng(32);
+    const odds = (fn) => {
+      let total = 0;
+      for (let i = 0; i < 120; i++) {
+        const g = createGame({ players: players() });
+        g.deckFn = fn;
+        startHand(g);
+        total += rivalOdds(g, rng);
+      }
+      return total / 120;
+    };
+    const normal = odds(makeLuckyDeckFn(() => 0, () => 0.5));
+    const lucky = odds(makeLuckyDeckFn(() => 3, () => 0.2)); // 0.2 < luckChance(3)
+    expect(normal).toBeGreaterThan(0.53);
+    expect(lucky).toBeLessThan(normal);
   });
 });
 

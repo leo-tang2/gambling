@@ -2,9 +2,10 @@
 // (drink, roulette, cigar), the hidden luck from drinks, and the bar you run after cashing out.
 // Pure functions + plain data so they can be unit tested.
 
-import { shuffledDeck } from '../engine/deck.js';
+import { shuffledDeck, shuffle } from '../engine/deck.js';
 import { nextSeat, activeCount } from '../engine/engine.js';
 import { preflopScore } from '../ai/preflop.js';
+import { evaluate } from '../engine/evaluator.js';
 
 export const FIRST_STAKE = 1000;
 
@@ -86,17 +87,98 @@ export function livelyDeck(g) {
 }
 
 /**
- * Deck builder for the engine. Normally a plain fair shuffle. One hand in ten everyone is dealt
- * something playable (livelyDeck). With drink luck, now and then it shuffles a few decks and
- * keeps the one that deals the human the best starting hand. Nothing tells the player either
- * happened.
+ * A rival: on a normal hand one opponent starts with a hand just a little better than yours,
+ * a real heads-up favourite by RIVAL_EDGE (win chance before the flop), so there's usually
+ * someone worth fighting. It's only a small edge and the board decides, so you can still win.
+ */
+export const RIVAL_EDGE = [0.53, 0.66];
+const RIVAL_TRIES = 40;
+const RIVAL_RUNOUTS = 160;
+/** The reshuffles and odds checks only pick opponents' cards, so a fast generator is fine there. */
+const fastRng = { int: (n) => Math.floor(Math.random() * n), float: () => Math.random() };
+
+/** Monte Carlo chance that hand `a` beats hand `b` heads-up with five cards to come (ties count half). */
+export function headsUpEquity(a, b, rng = fastRng, runouts = RIVAL_RUNOUTS) {
+  const dead = new Set([...a, ...b]);
+  const pool = [];
+  for (let c = 0; c < 52; c++) if (!dead.has(c)) pool.push(c);
+  let won = 0;
+  for (let it = 0; it < runouts; it++) {
+    for (let i = 0; i < 5; i++) {
+      const j = i + rng.int(pool.length - i);
+      const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+    }
+    const board = pool.slice(0, 5);
+    const ea = evaluate(a.concat(board)), eb = evaluate(b.concat(board));
+    won += ea > eb ? 1 : ea === eb ? 0.5 : 0;
+  }
+  return won / runouts;
+}
+
+/**
+ * The best heads-up win chance any opponent has against the human from this deck (null when the
+ * human isn't dealt in). Hands far weaker or far stronger by preflopScore are skipped/estimated
+ * without simulating, to keep it cheap.
+ */
+export function rivalEdge(deck, idx, human, rng = fastRng) {
+  if (!idx[human]) return null;
+  const mine = [deck[idx[human][0]], deck[idx[human][1]]];
+  const myScore = preflopScore(mine[0], mine[1]);
+  let best = null;
+  for (const [seat, [i, j]] of Object.entries(idx)) {
+    if (Number(seat) === human) continue;
+    const theirs = [deck[i], deck[j]];
+    const sc = preflopScore(theirs[0], theirs[1]);
+    let eq;
+    if (sc < myScore - 3) eq = 0.3; // clearly behind
+    else if (sc > myScore + 6) eq = 0.8; // clearly ahead
+    else eq = headsUpEquity(theirs, mine, rng);
+    best = best === null ? eq : Math.max(best, eq);
+  }
+  return best;
+}
+
+/**
+ * The human's two cards come from a fair shuffle and stay put; the other 50 cards are reshuffled
+ * until some opponent is a small favourite against them (or as close as it gets). Only the
+ * opponents' cards are picked, so the human's own hands are as good as ever.
+ */
+export function rivalDeck(g) {
+  const idx = holeIndexes(g);
+  const human = g.players.findIndex((p) => p.isHuman);
+  const base = shuffledDeck(g.rng);
+  if (!idx[human] || Object.keys(idx).length < 2) return base;
+  const [hi0, hj0] = idx[human];
+  const rest = base.filter((_, pos) => pos !== hi0 && pos !== hj0);
+  const [lo, hi] = RIVAL_EDGE;
+  let best = base, bestMiss = Infinity;
+  for (let i = 0; i < RIVAL_TRIES; i++) {
+    let d = base;
+    if (i > 0) {
+      shuffle(rest, fastRng);
+      let k = 0;
+      d = base.map((c, pos) => (pos === hi0 || pos === hj0 ? c : rest[k++]));
+    }
+    const e = rivalEdge(d, idx, human);
+    const miss = e < lo ? lo - e : e > hi ? e - hi : 0;
+    if (miss < bestMiss) { best = d; bestMiss = miss; }
+    if (miss === 0) break;
+  }
+  return best;
+}
+
+/**
+ * Deck builder for the engine. One hand in ten everyone is dealt something playable
+ * (livelyDeck). With drink luck, now and then it shuffles a few decks and keeps the one that
+ * deals the human the best starting hand. Every other hand an opponent gets a hand just a bit
+ * better than the human's (rivalDeck). Nothing tells the player any of this happened.
  */
 export function makeLuckyDeckFn(getLuck, rand = Math.random) {
   return (g) => {
     if (rand() < LIVELY_CHANCE) return livelyDeck(g);
     const luck = getLuck();
+    if (!luck || rand() >= luckChance(luck)) return rivalDeck(g);
     const deck = shuffledDeck(g.rng);
-    if (!luck || rand() >= luckChance(luck)) return deck;
     const idx = humanHoleIndexes(g);
     if (!idx) return deck;
     let best = deck;

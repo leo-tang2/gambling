@@ -140,4 +140,44 @@ describe('opponent AI', () => {
     };
     expect(foldRate(PERSONALITIES.tight)).toBeGreaterThan(foldRate(PERSONALITIES.loose));
   });
+
+  it('sometimes looks up a preflop all-in with a decent hand, never with junk', () => {
+    const rng = seededRng(21);
+    const shover = { preRaises: 1, raises: 1, streetRaises: 1, vpip: true, allIn: true, committed: 1000 };
+    let calls = 0;
+    const n = 300;
+    for (let i = 0; i < n; i++) {
+      const d = decide(facing({ hole: 'Ah Td', board: '', toCall: 1000, pot: 1030, villain: shover, stack: 1000 }), PERSONALITIES.aggressive, rng);
+      if (d.type === 'call') calls++;
+      expect(decide(facing({ hole: '7c 2d', board: '', toCall: 1000, pot: 1030, villain: shover, stack: 1000 }), PERSONALITIES.loose, rng).type).toBe('fold');
+    }
+    expect(calls / n).toBeGreaterThan(0.2);
+    expect(calls / n).toBeLessThan(0.9);
+  });
+
+  it('sometimes calls an all-in on the flop with a pair', () => {
+    const rng = seededRng(22);
+    const shover = { preRaises: 1, raises: 2, streetRaises: 1, vpip: true, allIn: true, committed: 1000 };
+    let calls = 0;
+    const n = 120;
+    for (let i = 0; i < n; i++) {
+      const d = decide(facing({ hole: 'Kh Jd', board: 'Ks 8h 3c', toCall: 900, pot: 1200, villain: shover, stack: 900 }), PERSONALITIES.tight, rng);
+      if (d.type === 'call' || d.type === 'allin') calls++;
+    }
+    expect(calls / n).toBeGreaterThan(0.2);
+  });
+
+  it('sees plenty of flops: most hands someone besides the blinds plays', () => {
+    const rng = seededRng(23);
+    const styles = [PERSONALITIES.tight, PERSONALITIES.aggressive, PERSONALITIES.loose, PERSONALITIES.tight];
+    let playersIn = 0;
+    const n = 300;
+    for (let i = 0; i < n; i++) {
+      const g = createGame({ players: [{}, {}, {}, {}], rng, button: i % 4 });
+      startHand(g);
+      while (g.street === 'preflop') applyAction(g, decide(playerView(g, g.actionOn), styles[g.actionOn], rng));
+      playersIn += g.players.filter((p) => !p.folded).length;
+    }
+    expect(playersIn / n).toBeGreaterThan(1.7); // the old, foldier table saw about 1.3
+  });
 });
